@@ -1,21 +1,19 @@
 /**
  * BPM & Key Finder (TOOL / 005) — Saint Gordon Collective
- * Interactive Studio Controller: Single & Batch Audio Analysis, Harmonic Deck,
- * Beat-Locked Metronome, Chord & Drone Audition, Chromagram, Camelot Wheel, Queue & Export.
+ * Clean, Focused Studio Controller:
+ * Drop -> Instant BPM & Key -> Ear-Check (Click Track / Hear Key) -> Copy.
  */
 
 import {
   PITCH_CLASSES_FLAT,
   PITCH_CLASSES_SHARP,
   analyzeAudioBuffer,
-  computeDelayTimings,
   exportQueueToCsv,
   exportQueueToMarkdown,
   formatKeyName,
   formatTime,
   formatTrackTag,
   getCompatibleKeys,
-  getHarmonicRelation,
   getKeyByCamelot,
   getKeyInfo,
   isSupportedAudioFilename,
@@ -26,12 +24,10 @@ import { CamelotWheelView } from './camelot-wheel.js';
 const engine = new AuditionEngine();
 
 const state = {
-  tracks: [], // Array of TrackItem
+  tracks: [],
   activeTrackId: null,
   accidentalStyle: 'auto', // 'auto' | 'sharp' | 'flat'
-  sortMode: 'order', // 'order' | 'bpm-asc' | 'bpm-desc' | 'camelot' | 'name'
-  wheelCamelot: '11A', // Currently inspected Camelot key on the SVG wheel
-  standbyBpm: 120,
+  wheelCamelot: '11A',
   tapTimes: [],
   tapBpm: null,
   isProcessing: false,
@@ -41,16 +37,20 @@ const state = {
 
 const dom = {
   footerYear: document.getElementById('footer-year'),
-  btnHeaderClear: document.getElementById('btn-header-clear'),
+  pageDropOverlay: document.getElementById('page-drop-overlay'),
 
-  // Dropzone
-  dropzone: document.getElementById('upload-dropzone'),
-  dropzoneClick: document.getElementById('dropzone-click-target'),
+  // Upload & Collapsed Top Bar
   fileInput: document.getElementById('file-upload-input'),
   folderInput: document.getElementById('folder-upload-input'),
+  dropzone: document.getElementById('upload-dropzone'),
+  dropzoneClick: document.getElementById('dropzone-click-target'),
   btnSelectFiles: document.getElementById('btn-select-files'),
   btnSelectFolder: document.getElementById('btn-select-folder'),
   btnLoadDemo: document.getElementById('btn-load-demo'),
+  compactActionBar: document.getElementById('compact-action-bar'),
+  btnAddMoreBar: document.getElementById('btn-add-more-bar'),
+  btnAddFolderBar: document.getElementById('btn-add-folder-bar'),
+  btnClearSession: document.getElementById('btn-clear-session'),
 
   // Progress & Errors
   progressContainer: document.getElementById('analysis-progress-container'),
@@ -62,73 +62,59 @@ const dom = {
   errorsList: document.getElementById('analysis-errors-list'),
   btnDismissErrors: document.getElementById('btn-dismiss-errors'),
 
-  // Deck header & nav
+  // Hero Result Deck
   studioDeck: document.getElementById('studio-deck'),
   deckLed: document.getElementById('deck-led'),
   deckTrackName: document.getElementById('deck-track-name'),
   deckTrackSpecs: document.getElementById('deck-track-specs'),
-  deckStatePill: document.getElementById('deck-state-pill'),
   btnPrevTrack: document.getElementById('btn-prev-track'),
   btnNextTrack: document.getElementById('btn-next-track'),
-  btnCopyTagTop: document.getElementById('btn-copy-tag-top'),
+  btnCopyAll: document.getElementById('btn-copy-all'),
 
-  // BPM Module
+  // Left: BPM
   bpmHeroValue: document.getElementById('bpm-hero-value'),
-  bpmOctavesMeta: document.getElementById('bpm-octaves-meta'),
   bpmConfidenceBadge: document.getElementById('bpm-confidence-badge'),
   bpmOverrideBadge: document.getElementById('bpm-override-badge'),
   btnHalfBpm: document.getElementById('btn-half-bpm'),
   btnDoubleBpm: document.getElementById('btn-double-bpm'),
   btnResetBpm: document.getElementById('btn-reset-bpm'),
-  btnTapTempo: document.getElementById('btn-tap-tempo'),
-  tapFeedbackBar: document.getElementById('tap-feedback-bar'),
-  tapFeedbackText: document.getElementById('tap-feedback-text'),
-  btnClearTap: document.getElementById('btn-clear-tap'),
-  bpmCandidatesList: document.getElementById('bpm-candidates-list'),
+  btnCopyBpm: document.getElementById('btn-copy-bpm'),
 
-  // Key Module
+  // Right: Key
   keyHeroValue: document.getElementById('key-hero-value'),
   keyRelativeMeta: document.getElementById('key-relative-meta'),
   keyCamelotBadge: document.getElementById('key-camelot-badge'),
-  keyOpenkeyBadge: document.getElementById('key-openkey-badge'),
   keyConfidenceBadge: document.getElementById('key-confidence-badge'),
   keyTuningBadge: document.getElementById('key-tuning-badge'),
   btnEnharmonicToggle: document.getElementById('btn-enharmonic-toggle'),
   enharmonicModeLabel: document.getElementById('enharmonic-mode-label'),
-  btnPlayChord: document.getElementById('btn-play-chord'),
-  btnTonicDrone: document.getElementById('btn-tonic-drone'),
-  keyCandidatesList: document.getElementById('key-candidates-list'),
+  btnCopyKey: document.getElementById('btn-copy-key'),
 
-  // Waveform & Transport
+  // Player & Ear-Check
+  btnPlayPause: document.getElementById('btn-play-pause'),
+  playBtnGlyph: document.getElementById('play-btn-glyph'),
+  playBtnText: document.getElementById('play-btn-text'),
   waveformScrubber: document.getElementById('waveform-scrubber'),
   waveformCanvas: document.getElementById('waveform-canvas'),
   timelineProgressBar: document.getElementById('timeline-progress-bar'),
   timelinePlayhead: document.getElementById('timeline-playhead'),
-  timelineCurrentTime: document.getElementById('timeline-current-time'),
-  timelineTotalTime: document.getElementById('timeline-total-time'),
-  waveEmptyHint: document.getElementById('wave-empty-hint'),
-  btnPlayPause: document.getElementById('btn-play-pause'),
-  playBtnGlyph: document.getElementById('play-btn-glyph'),
-  playBtnText: document.getElementById('play-btn-text'),
-  btnRestart: document.getElementById('btn-restart'),
+  timelineTime: document.getElementById('timeline-time'),
   btnMetronome: document.getElementById('btn-metronome'),
   metroDots: document.getElementById('metro-dots'),
-  btnNudgeMinus: document.getElementById('btn-nudge-minus'),
-  btnSnapBeat: document.getElementById('btn-snap-beat'),
-  btnNudgePlus: document.getElementById('btn-nudge-plus'),
-  beatOffsetReadout: document.getElementById('beat-offset-readout'),
+  btnPlayChord: document.getElementById('btn-play-chord'),
   volumeSlider: document.getElementById('master-volume-slider'),
 
-  // Timing Strip
-  timingQuarter: document.getElementById('timing-quarter'),
-  timingEighth: document.getElementById('timing-eighth'),
-  timingDotted: document.getElementById('timing-dotted'),
-  timingSixteenth: document.getElementById('timing-sixteenth'),
-  timingBar: document.getElementById('timing-bar'),
-  copyTagPreview: document.getElementById('copy-tag-preview'),
-  btnCopyTagStrip: document.getElementById('btn-copy-tag-strip'),
+  // Reverb & Delay Counter Cross-Link
+  reverbDelayBpm: document.getElementById('reverb-delay-bpm'),
+  reverbDelayLink: document.getElementById('reverb-delay-link'),
 
-  // Analytics
+  // Collapsible More Details Drawer
+  moreDetailsDrawer: document.getElementById('more-details-drawer'),
+  bpmCandidatesList: document.getElementById('bpm-candidates-list'),
+  keyCandidatesList: document.getElementById('key-candidates-list'),
+  btnTapTempo: document.getElementById('btn-tap-tempo'),
+  tapReadout: document.getElementById('tap-readout'),
+  btnClearTap: document.getElementById('btn-clear-tap'),
   chromaChart: document.getElementById('chroma-chart'),
   chromaScaleNotes: document.getElementById('chroma-scale-notes'),
   camelotWheelMount: document.getElementById('camelot-wheel-mount'),
@@ -136,11 +122,9 @@ const dom = {
   compatActiveLabel: document.getElementById('compat-active-label'),
   compatList: document.getElementById('compat-list'),
 
-  // Queue
+  // Batch Queue (2+ tracks only)
   queueSection: document.getElementById('queue-section'),
   queueCountText: document.getElementById('queue-count-text'),
-  queueSortSelect: document.getElementById('queue-sort-select'),
-  btnAddMore: document.getElementById('btn-add-more'),
   btnExportCsv: document.getElementById('btn-export-csv'),
   btnExportMd: document.getElementById('btn-export-md'),
   queueTableBody: document.getElementById('queue-table-body'),
@@ -151,7 +135,7 @@ const dom = {
 let camelotWheel = null;
 
 /* ==========================================================================
-   HELPERS & TOASTS
+   HELPERS
    ========================================================================== */
 
 function getActiveTrack() {
@@ -159,16 +143,29 @@ function getActiveTrack() {
   return state.tracks.find((t) => t.id === state.activeTrackId) || null;
 }
 
-function getEffectiveBpm() {
-  const track = getActiveTrack();
-  if (track) return track.effectiveBpm;
-  return state.tapBpm || state.standbyBpm;
-}
-
 function getEffectiveKeyInfo() {
   const track = getActiveTrack();
   if (track) return track.effectiveKeyInfo;
   return getKeyByCamelot(state.wheelCamelot);
+}
+
+/**
+ * Format BPM cleanly: hide ".0" when exact integer (e.g. "124"), keep tenths when fractional ("128.5").
+ */
+function formatBpmPlain(bpm) {
+  if (!Number.isFinite(bpm) || bpm <= 0) return '—';
+  const rounded = Math.round(bpm * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function formatBpmHtml(bpm) {
+  if (!Number.isFinite(bpm) || bpm <= 0) return '—';
+  const rounded = Math.round(bpm * 10) / 10;
+  if (Number.isInteger(rounded)) {
+    return String(rounded);
+  }
+  const [whole, dec] = rounded.toFixed(1).split('.');
+  return `${whole}<span class="bpm-dec">.${dec}</span>`;
 }
 
 function showToast(message, isError = false) {
@@ -180,7 +177,7 @@ function showToast(message, isError = false) {
     toast.style.opacity = '0';
     toast.style.transform = 'translateY(6px)';
     window.setTimeout(() => toast.remove(), 260);
-  }, 2600);
+  }, 2400);
 }
 
 async function copyTextToClipboard(text, successMsg) {
@@ -228,7 +225,7 @@ function escapeHtml(str) {
 }
 
 /* ==========================================================================
-   RECURSIVE FILE & FOLDER DROP HANDLING
+   RECURSIVE FILE & FOLDER DROP COLLECTION
    ========================================================================== */
 
 async function collectFilesFromDataTransfer(dataTransfer) {
@@ -284,7 +281,7 @@ async function collectFilesFromDataTransfer(dataTransfer) {
 }
 
 /* ==========================================================================
-   AUDIO DECODING & BATCH ANALYSIS PIPELINE
+   AUDIO DECODING & ANALYSIS PIPELINE
    ========================================================================== */
 
 async function ingestFiles(fileList) {
@@ -305,9 +302,7 @@ async function ingestFiles(fileList) {
   }
 
   if (audioFiles.length === 0) {
-    if (skipped.length > 0) {
-      renderErrors(skipped);
-    }
+    if (skipped.length > 0) renderErrors(skipped);
     showToast('No supported audio files found', true);
     return;
   }
@@ -343,7 +338,7 @@ async function ingestFiles(fileList) {
     }
   }
 
-  dom.progressText.textContent = `Completed ${audioFiles.length} file${audioFiles.length === 1 ? '' : 's'}`;
+  dom.progressText.textContent = `Done (${audioFiles.length} file${audioFiles.length === 1 ? '' : 's'})`;
   dom.progressPct.textContent = '100%';
   dom.progressBar.style.width = '100%';
   state.isProcessing = false;
@@ -352,11 +347,9 @@ async function ingestFiles(fileList) {
     if (!state.isProcessing) {
       dom.progressContainer.classList.add('hidden');
     }
-  }, 650);
+  }, 550);
 
-  if (errors.length > 0) {
-    renderErrors(errors);
-  }
+  if (errors.length > 0) renderErrors(errors);
 
   if (firstNewTrackId !== null) {
     selectTrack(firstNewTrackId);
@@ -373,17 +366,15 @@ async function ingestFiles(fileList) {
 }
 
 function createTrackItem(name, audioBuffer, analysis) {
-  const detectedBpm = analysis.bpm.bpm || 120;
+  const detectedBpm = analysis.bpm.bpm || 0;
   const detectedKey = getKeyInfo(analysis.key.pitchClass, analysis.key.mode);
   return {
     id: state.nextId++,
-    orderIndex: state.tracks.length,
     name,
     audioBuffer,
     analysis,
-    // Mutable inspection overrides (half/double-time, candidate picks, beat offset nudge)
-    bpmMultiplier: 1, // 0.5 | 1 | 2
-    bpmOverride: null, // manual BPM override from tap or candidate
+    bpmMultiplier: 1,
+    bpmOverride: null,
     effectiveBpm: detectedBpm,
     beatOffsetSec: analysis.bpm.beatOffsetSec || 0,
     effectiveKeyInfo: detectedKey,
@@ -397,11 +388,11 @@ function renderErrors(messages) {
       ? '1 file could not be analyzed'
       : `${messages.length} files could not be analyzed`;
   dom.errorsList.innerHTML = messages
-    .slice(0, 8)
+    .slice(0, 6)
     .map((m) => `<li>${escapeHtml(m)}</li>`)
     .join('');
-  if (messages.length > 8) {
-    dom.errorsList.innerHTML += `<li>…and ${messages.length - 8} more</li>`;
+  if (messages.length > 6) {
+    dom.errorsList.innerHTML += `<li>…and ${messages.length - 6} more</li>`;
   }
   dom.errorsBanner.classList.remove('hidden');
 }
@@ -409,61 +400,58 @@ function renderErrors(messages) {
 async function loadDemoBeat() {
   const ctx = engine.ensureContext();
   dom.progressContainer.classList.remove('hidden');
-  dom.progressText.textContent = 'Synthesizing & analyzing 124 BPM F#m studio groove...';
-  dom.progressPct.textContent = '45%';
-  dom.progressBar.style.width = '45%';
+  dom.progressText.textContent = 'Synthesizing & analyzing demo beat...';
+  dom.progressPct.textContent = '50%';
+  dom.progressBar.style.width = '50%';
   await nextUiFrame();
 
   const demoBuffer = generateDemoTrackBuffer(ctx);
   const analysis = analyzeAudioBuffer(demoBuffer);
-  const track = createTrackItem('Saint_Gordon_Demo_Groove_124BPM_Fm.wav', demoBuffer, analysis);
-  track.name = 'Saint Gordon — Studio Demo (124 BPM · F#m).wav';
+  const track = createTrackItem('Saint Gordon — Demo Beat (124 BPM · F#m).wav', demoBuffer, analysis);
   state.tracks.push(track);
 
   dom.progressPct.textContent = '100%';
   dom.progressBar.style.width = '100%';
-  window.setTimeout(() => dom.progressContainer.classList.add('hidden'), 350);
+  window.setTimeout(() => dom.progressContainer.classList.add('hidden'), 300);
 
   selectTrack(track.id);
   renderQueue();
-  showToast(`Loaded demo: ${track.effectiveBpm.toFixed(1)} BPM · ${track.effectiveKeyInfo.key} (${track.effectiveKeyInfo.camelot})`);
+  showToast(
+    `Loaded demo: ${formatBpmPlain(track.effectiveBpm)} BPM · ${track.effectiveKeyInfo.key} (${track.effectiveKeyInfo.camelot})`
+  );
 }
 
 /* ==========================================================================
-   TRACK SELECTION & DECK RENDERING
+   TRACK SELECTION & RENDERING
    ========================================================================== */
 
 function selectTrack(trackId) {
   const track = state.tracks.find((t) => t.id === trackId);
   if (!track) return;
 
-  const wasDroneActive = engine.droneActive;
   state.activeTrackId = track.id;
   state.tapTimes = [];
   state.tapBpm = null;
-  dom.tapFeedbackBar.classList.add('hidden');
+  dom.tapReadout.textContent = 'Ready';
+  dom.btnClearTap.classList.add('hidden');
 
-  engine.loadTrack(track.audioBuffer, track.effectiveBpm, track.beatOffsetSec);
-
-  if (wasDroneActive) {
-    engine.startTonicDrone(track.effectiveKeyInfo.pitchClass, track.effectiveKeyInfo.mode);
-  }
+  engine.loadTrack(track.audioBuffer, track.effectiveBpm || 120, track.beatOffsetSec);
 
   state.wheelCamelot = track.effectiveKeyInfo.camelot;
   if (camelotWheel) {
     camelotWheel.setDetected(track.effectiveKeyInfo.camelot);
   }
 
-  renderDeck();
-  renderQueue();
+  renderAll();
+  // Ensure waveform canvas measures non-zero width right after revealing #studio-deck
+  window.requestAnimationFrame(drawWaveformCanvas);
 }
 
 function navigateTrack(delta) {
-  const ordered = getSortedTracks();
-  if (ordered.length < 2) return;
-  const idx = ordered.findIndex((t) => t.id === state.activeTrackId);
-  const nextIdx = (idx + delta + ordered.length) % ordered.length;
-  selectTrack(ordered[nextIdx].id);
+  if (state.tracks.length < 2) return;
+  const idx = state.tracks.findIndex((t) => t.id === state.activeTrackId);
+  const nextIdx = (idx + delta + state.tracks.length) % state.tracks.length;
+  selectTrack(state.tracks[nextIdx].id);
 }
 
 function removeTrack(trackId) {
@@ -481,8 +469,7 @@ function removeTrack(trackId) {
     const next = state.tracks[Math.min(idx, state.tracks.length - 1)];
     selectTrack(next.id);
   } else {
-    renderDeckNav();
-    renderQueue();
+    renderAll();
   }
 }
 
@@ -493,244 +480,172 @@ function clearSession() {
   state.tapTimes = [];
   state.tapBpm = null;
   state.wheelCamelot = '11A';
-  dom.tapFeedbackBar.classList.add('hidden');
+  dom.tapReadout.textContent = 'Ready';
+  dom.btnClearTap.classList.add('hidden');
   dom.errorsBanner.classList.add('hidden');
   if (camelotWheel) {
     camelotWheel.setDetected(null);
     camelotWheel.setActive('11A');
   }
-  renderDeck();
-  renderQueue();
+  renderAll();
   showToast('Session cleared');
 }
 
-function renderDeck() {
+function renderAll() {
   const track = getActiveTrack();
   const hasTrack = Boolean(track);
 
-  dom.btnHeaderClear.classList.toggle('hidden', state.tracks.length === 0);
-  renderDeckNav();
+  // Smart Dropzone collapses to 1-line bar once a track is loaded
+  dom.dropzone.classList.toggle('hidden', hasTrack);
+  dom.compactActionBar.classList.toggle('hidden', !hasTrack);
+  dom.studioDeck.classList.toggle('hidden', !hasTrack);
 
-  // Deck state pill & top bar
-  if (!hasTrack) {
-    dom.studioDeck.dataset.state = 'standby';
-    dom.deckStatePill.textContent = engine.metronomeEnabled ? 'CLICK ONLY' : 'STANDBY';
-    dom.deckTrackName.textContent = 'STANDBY — DROP AUDIO OR USE TAP TEMPO & WHEEL';
-    dom.deckTrackSpecs.classList.add('hidden');
-  } else {
-    dom.studioDeck.dataset.state = engine.isPlaying ? 'playing' : 'ready';
-    dom.deckStatePill.textContent = engine.isPlaying ? 'PLAYING' : 'READY';
-    dom.deckTrackName.textContent = track.name;
-    const khz = (track.analysis.sampleRate / 1000).toFixed(1);
-    const chLabel = track.analysis.channels === 1 ? 'MONO' : track.analysis.channels === 2 ? 'STEREO' : `${track.analysis.channels}CH`;
-    dom.deckTrackSpecs.textContent = `${khz} kHz · ${chLabel} · ${track.analysis.analysisMs} ms DSP`;
-    dom.deckTrackSpecs.classList.remove('hidden');
+  if (hasTrack) {
+    renderDeck(track);
   }
-
-  renderBpmModule(track);
-  renderKeyModule(track);
-  renderTransportAndWaveform(track);
-  renderTimingAndTagStrip(track);
-  renderChromagram(track);
-  renderCamelotTransitions();
+  renderDetailsDrawer(track);
+  renderQueue();
 }
 
-function renderDeckNav() {
+function renderDeck(track) {
   const hasMultiple = state.tracks.length > 1;
   dom.btnPrevTrack.classList.toggle('hidden', !hasMultiple);
   dom.btnNextTrack.classList.toggle('hidden', !hasMultiple);
-  const hasTrack = Boolean(getActiveTrack());
-  dom.btnCopyTagTop.disabled = !hasTrack;
-  dom.btnCopyTagStrip.disabled = !hasTrack;
-}
 
-function renderBpmModule(track) {
-  const effectiveBpm = getEffectiveBpm();
-  const hasBpm = Boolean(track && track.analysis.bpm.bpm > 0) || Boolean(state.tapBpm);
+  dom.studioDeck.dataset.state = engine.isPlaying ? 'playing' : 'ready';
+  dom.deckTrackName.textContent = track.name;
+  dom.deckTrackName.title = track.name;
+  const khz = (track.analysis.sampleRate / 1000).toFixed(1);
+  const chLabel =
+    track.analysis.channels === 1
+      ? 'MONO'
+      : track.analysis.channels === 2
+        ? 'STEREO'
+        : `${track.analysis.channels}CH`;
+  dom.deckTrackSpecs.textContent = `${khz} kHz · ${chLabel}`;
 
-  if (hasBpm) {
-    const [wholePart, decPart] = effectiveBpm.toFixed(1).split('.');
-    dom.bpmHeroValue.innerHTML = `${wholePart}<span class="bpm-dec">.${decPart}</span>`;
-  } else {
-    dom.bpmHeroValue.textContent = '—';
-  }
+  // LEFT — BPM Readout
+  const bpm = track.effectiveBpm;
+  dom.bpmHeroValue.innerHTML = formatBpmHtml(bpm);
 
-  if (hasBpm) {
-    const half = (effectiveBpm / 2).toFixed(1);
-    const dbl = (effectiveBpm * 2).toFixed(1);
-    const offsetStr = track ? ` · BEAT 1 ${track.beatOffsetSec.toFixed(3)}s` : '';
-    dom.bpmOctavesMeta.textContent = `HALF ${half} · DOUBLE ${dbl}${offsetStr}`;
-  } else {
-    dom.bpmOctavesMeta.textContent = 'HALF — · DOUBLE —';
-  }
+  const bpmConf = track.analysis.bpm.confidence;
+  dom.bpmConfidenceBadge.textContent = `${bpmConf}% MATCH`;
+  dom.bpmConfidenceBadge.classList.toggle('badge-bright', bpmConf >= 75);
 
-  if (track) {
-    const conf = track.analysis.bpm.confidence;
-    dom.bpmConfidenceBadge.textContent = `CONF ${conf}%`;
-    dom.bpmConfidenceBadge.classList.toggle('badge-bright', conf >= 75);
-  } else {
-    dom.bpmConfidenceBadge.textContent = state.tapBpm ? 'MANUAL TAP' : 'CONF —';
-    dom.bpmConfidenceBadge.classList.remove('badge-bright');
-  }
-
-  // Override badge (Half-Time / Double-Time / Tapped / Candidate)
   let overrideLabel = '';
-  if (track) {
-    if (track.bpmOverride !== null) {
-      overrideLabel = state.tapBpm ? 'TAPPED' : 'ALT PEAK';
-    } else if (track.bpmMultiplier === 0.5) {
-      overrideLabel = '÷2 HALF-TIME';
-    } else if (track.bpmMultiplier === 2) {
-      overrideLabel = '×2 DOUBLE-TIME';
-    }
+  if (track.bpmOverride !== null) {
+    overrideLabel = state.tapBpm ? 'TAPPED' : 'ALT PEAK';
+  } else if (track.bpmMultiplier === 0.5) {
+    overrideLabel = 'HALF-TIME';
+  } else if (track.bpmMultiplier === 2) {
+    overrideLabel = 'DOUBLE-TIME';
   }
   dom.bpmOverrideBadge.textContent = overrideLabel;
   dom.bpmOverrideBadge.classList.toggle('hidden', !overrideLabel);
 
-  dom.btnHalfBpm.disabled = !hasBpm;
-  dom.btnDoubleBpm.disabled = !hasBpm;
-  dom.btnHalfBpm.classList.toggle('deck-pill-active', Boolean(track && track.bpmMultiplier === 0.5));
-  dom.btnDoubleBpm.classList.toggle('deck-pill-active', Boolean(track && track.bpmMultiplier === 2));
+  dom.btnHalfBpm.disabled = !(bpm > 0);
+  dom.btnDoubleBpm.disabled = !(bpm > 0);
+  dom.btnHalfBpm.classList.toggle('deck-pill-active', track.bpmMultiplier === 0.5);
+  dom.btnDoubleBpm.classList.toggle('deck-pill-active', track.bpmMultiplier === 2);
   dom.btnResetBpm.classList.toggle(
     'hidden',
-    !(track && (track.bpmMultiplier !== 1 || track.bpmOverride !== null))
+    !(track.bpmMultiplier !== 1 || track.bpmOverride !== null)
   );
 
-  // Tempo Candidates
-  if (!track || !track.analysis.bpm.candidates.length) {
-    dom.bpmCandidatesList.innerHTML =
-      '<span class="micro muted-placeholder">Drop a track to inspect tempo peaks</span>';
+  // RIGHT — Musical Key Readout
+  const keyInfo = track.effectiveKeyInfo;
+  dom.keyHeroValue.textContent = formatKeyName(keyInfo, state.accidentalStyle, false);
+  dom.keyRelativeMeta.textContent = `Relative: ${keyInfo.relativeKey}`;
+  dom.keyCamelotBadge.textContent = keyInfo.camelot;
+
+  const keyConf = track.analysis.key.confidence;
+  dom.keyConfidenceBadge.textContent = track.keyOverridden ? 'SELECTED' : `${keyConf}% MATCH`;
+  dom.keyConfidenceBadge.classList.toggle('badge-bright', !track.keyOverridden && keyConf >= 70);
+
+  const cents = track.analysis.key.tuningCents || 0;
+  if (Math.abs(cents) >= 8) {
+    const sign = cents > 0 ? '+' : '';
+    dom.keyTuningBadge.textContent = `${sign}${cents}¢`;
+    dom.keyTuningBadge.classList.remove('hidden');
   } else {
-    dom.bpmCandidatesList.innerHTML = track.analysis.bpm.candidates
-      .map((cand, idx) => {
-        const isActive = Math.abs(track.effectiveBpm - cand.bpm) < 0.06;
-        return `<button type="button" class="cand-chip${isActive ? ' active' : ''}" data-bpm-cand="${cand.bpm}">
-          <span>${idx + 1}. ${cand.bpm.toFixed(1)} BPM</span>
-          <span class="cand-score">${cand.score}%</span>
-        </button>`;
-      })
-      .join('');
-  }
-}
-
-function renderKeyModule(track) {
-  const keyInfo = track ? track.effectiveKeyInfo : null;
-
-  if (!keyInfo) {
-    dom.keyHeroValue.textContent = '—';
-    dom.keyRelativeMeta.textContent = 'RELATIVE: — · ENHARMONIC: —';
-    dom.keyCamelotBadge.textContent = '—';
-    dom.keyOpenkeyBadge.textContent = 'OPEN —';
-    dom.keyConfidenceBadge.textContent = 'CONF —';
-    dom.keyConfidenceBadge.classList.remove('badge-bright');
     dom.keyTuningBadge.classList.add('hidden');
-    dom.keyCandidatesList.innerHTML =
-      '<span class="micro muted-placeholder">Drop a track to compare top 4 key hypotheses</span>';
-  } else {
-    dom.keyHeroValue.textContent = formatKeyName(keyInfo, state.accidentalStyle, false);
-    const enhStr = keyInfo.enharmonic ? ` · ENHARMONIC: ${keyInfo.enharmonic}` : '';
-    dom.keyRelativeMeta.textContent = `RELATIVE: ${keyInfo.relativeKey}${enhStr}`;
-    dom.keyCamelotBadge.textContent = keyInfo.camelot;
-    dom.keyOpenkeyBadge.textContent = `OPEN ${keyInfo.openKey.toUpperCase()}`;
-
-    const conf = track.analysis.key.confidence;
-    dom.keyConfidenceBadge.textContent = track.keyOverridden ? 'AUDITIONED' : `CONF ${conf}%`;
-    dom.keyConfidenceBadge.classList.toggle('badge-bright', !track.keyOverridden && conf >= 70);
-
-    const cents = track.analysis.key.tuningCents || 0;
-    if (Math.abs(cents) >= 8) {
-      const sign = cents > 0 ? '+' : '';
-      dom.keyTuningBadge.textContent = `TUNING ${sign}${cents}¢`;
-      dom.keyTuningBadge.classList.remove('hidden');
-    } else {
-      dom.keyTuningBadge.classList.add('hidden');
-    }
-
-    // Top 4 Key Candidates (clicking auditions chord & previews key!)
-    const cands = track.analysis.key.candidates || [];
-    dom.keyCandidatesList.innerHTML = cands
-      .map((c, idx) => {
-        const isActive = c.camelot === keyInfo.camelot;
-        const shortLabel = formatKeyName(c, state.accidentalStyle, true);
-        return `<button type="button" class="cand-chip${isActive ? ' active' : ''}" data-key-cand="${c.camelot}" title="Click to audition ${escapeHtml(formatKeyName(c, state.accidentalStyle, false))} triad chord">
-          <span>${idx + 1}. ${escapeHtml(shortLabel)} · ${c.camelot}</span>
-          <span class="cand-score">${c.scorePct}%</span>
-        </button>`;
-      })
-      .join('');
   }
 
   dom.enharmonicModeLabel.textContent =
     state.accidentalStyle === 'auto'
       ? 'AUTO'
       : state.accidentalStyle === 'sharp'
-        ? 'SHARP #'
-        : 'FLAT ♭';
+        ? '#'
+        : '♭';
 
-  dom.btnTonicDrone.setAttribute('aria-pressed', String(engine.droneActive));
-  dom.btnTonicDrone.classList.toggle('deck-pill-active', engine.droneActive);
-}
-
-function renderTransportAndWaveform(track) {
-  const hasTrack = Boolean(track);
-
-  dom.btnPlayPause.disabled = !hasTrack;
-  dom.btnRestart.disabled = !hasTrack;
-  dom.btnSnapBeat.disabled = !hasTrack;
-  dom.waveEmptyHint.classList.toggle('hidden', hasTrack);
-
+  // Player & Ear-Check Controls
   dom.playBtnGlyph.textContent = engine.isPlaying ? '❚❚' : '▶';
-  dom.playBtnText.textContent = engine.isPlaying ? 'Pause' : 'Play Track';
-
+  dom.playBtnText.textContent = engine.isPlaying ? 'Pause' : 'Play';
   dom.btnMetronome.setAttribute('aria-pressed', String(engine.metronomeEnabled));
   dom.btnMetronome.classList.toggle('deck-pill-active', engine.metronomeEnabled);
 
-  const offset = track ? track.beatOffsetSec : 0;
-  dom.beatOffsetReadout.textContent = `GRID ${offset.toFixed(3)}s`;
-
-  const duration = track ? track.analysis.durationSec : 0;
-  const current = track ? engine.getCurrentTime() : 0;
-  dom.timelineCurrentTime.textContent = formatTime(current, true);
-  dom.timelineTotalTime.textContent = formatTime(duration, true);
-  dom.waveformScrubber.setAttribute('aria-valuemax', String(Math.round(duration * 10) / 10));
-
   updatePlayheadVisuals();
   drawWaveformCanvas();
-}
 
-function renderTimingAndTagStrip(track) {
-  const bpm = getEffectiveBpm();
-  const timings = computeDelayTimings(bpm);
-
-  dom.timingQuarter.textContent = `${timings.quarterMs.toFixed(1)} ms`;
-  dom.timingEighth.textContent = `${timings.eighthMs.toFixed(1)} ms`;
-  dom.timingDotted.textContent = `${timings.dottedEighthMs.toFixed(1)} ms`;
-  dom.timingSixteenth.textContent = `${timings.sixteenthMs.toFixed(1)} ms`;
-  dom.timingBar.textContent = `${timings.barMs.toFixed(1)} ms`;
-
-  if (track) {
-    dom.copyTagPreview.textContent = formatTrackTag(
-      track.effectiveBpm,
-      track.effectiveKeyInfo,
-      state.accidentalStyle
-    );
-  } else if (state.tapBpm) {
-    dom.copyTagPreview.textContent = `${state.tapBpm.toFixed(1)} BPM (TAP)`;
-  } else {
-    dom.copyTagPreview.textContent = '— BPM · —';
-  }
+  // Dynamic Reverb & Delay Counter Cross-Link
+  const linkBpm = bpm > 0 ? formatBpmPlain(bpm) : '120';
+  dom.reverbDelayBpm.textContent = linkBpm;
+  dom.reverbDelayLink.href = `https://saintgordon.github.io/reverb-delay-counter/?bpm=${encodeURIComponent(linkBpm)}`;
 }
 
 /* ==========================================================================
-   12-NOTE CHROMAGRAM BAR CHART
+   COLLAPSIBLE DETAILS DRAWER (RUNNER-UPS, TAP TEMPO, CHROMAGRAM, CAMELOT)
    ========================================================================== */
+
+function renderDetailsDrawer(track) {
+  // Runner-Up BPM Candidates
+  const bpmCands = track?.analysis?.bpm?.candidates || [];
+  if (!track || bpmCands.length === 0) {
+    dom.bpmCandidatesList.innerHTML =
+      '<span class="micro muted-note">Load a track to inspect alternate tempo peaks</span>';
+  } else {
+    dom.bpmCandidatesList.innerHTML = bpmCands
+      .map((cand, idx) => {
+        const isActive = Math.abs(track.effectiveBpm - cand.bpm) < 0.06;
+        return `<button type="button" class="cand-chip${isActive ? ' active' : ''}" data-bpm-cand="${cand.bpm}">
+          <span>${idx + 1}. ${formatBpmPlain(cand.bpm)} BPM</span>
+          <span class="cand-score">${cand.score}%</span>
+        </button>`;
+      })
+      .join('');
+  }
+
+  // Runner-Up Key Candidates
+  const keyCands = track?.analysis?.key?.candidates || [];
+  const activeCamelot = track?.effectiveKeyInfo?.camelot || null;
+  if (!track || keyCands.length === 0) {
+    dom.keyCandidatesList.innerHTML =
+      '<span class="micro muted-note">Load a track to compare top key candidates</span>';
+  } else {
+    dom.keyCandidatesList.innerHTML = keyCands
+      .map((c, idx) => {
+        const isActive = c.camelot === activeCamelot;
+        const shortLabel = formatKeyName(c, state.accidentalStyle, true);
+        return `<button type="button" class="cand-chip${isActive ? ' active' : ''}" data-key-cand="${c.camelot}" title="Hear & switch to ${escapeHtml(formatKeyName(c, state.accidentalStyle, false))}">
+          <span>${idx + 1}. ${escapeHtml(shortLabel)} (${c.camelot})</span>
+          <span class="cand-score">${c.scorePct}%</span>
+        </button>`;
+      })
+      .join('');
+  }
+
+  renderChromagram(track);
+  renderCamelotTransitions();
+}
 
 function getPitchLabels() {
   if (state.accidentalStyle === 'flat') return PITCH_CLASSES_FLAT;
   if (state.accidentalStyle === 'sharp') return PITCH_CLASSES_SHARP;
-  // Auto mode matches sharp/flat to the active key's own convention
   const keyInfo = getEffectiveKeyInfo();
-  if (keyInfo && (keyInfo.tonic.includes('♭') || ['F', 'B♭', 'E♭', 'A♭', 'D♭', 'G♭'].includes(keyInfo.tonic))) {
+  if (
+    keyInfo &&
+    (keyInfo.tonic.includes('♭') || ['F', 'B♭', 'E♭', 'A♭', 'D♭', 'G♭'].includes(keyInfo.tonic))
+  ) {
     return PITCH_CLASSES_FLAT;
   }
   return PITCH_CLASSES_SHARP;
@@ -739,20 +654,23 @@ function getPitchLabels() {
 function renderChromagram(track) {
   const labels = getPitchLabels();
   const keyInfo = track ? track.effectiveKeyInfo : getKeyByCamelot(state.wheelCamelot);
-  const chroma = track?.analysis?.key?.chroma || new Array(12).fill(0.08);
+  const chroma =
+    Array.isArray(track?.analysis?.key?.chroma) && track.analysis.key.chroma.length === 12
+      ? track.analysis.key.chroma
+      : new Array(12).fill(0.08);
   const scaleSet = new Set(keyInfo ? keyInfo.scalePitchClasses : []);
   const tonicPc = keyInfo ? keyInfo.pitchClass : -1;
 
   dom.chromaChart.innerHTML = labels
     .map((note, pc) => {
-      const val = chroma[pc] || 0;
-      const pct = Math.max(4, Math.round(val * 100));
+      const val = Number(chroma[pc]) || 0;
+      const pct = Math.max(4, Math.min(100, Math.round(val * 100)));
       const isTonic = pc === tonicPc;
       const inScale = scaleSet.has(pc);
       const cls = isTonic ? 'is-tonic in-scale' : inScale ? 'in-scale' : '';
       const marker = isTonic ? '★' : inScale ? '·' : '';
 
-      return `<button type="button" class="chroma-col ${cls}" data-pc="${pc}" role="listitem" title="${note}: ${Math.round(val * 100)}% energy — click to hear pitch">
+      return `<button type="button" class="chroma-col ${cls}" data-pc="${pc}" role="listitem" title="${note}: ${Math.round(val * 100)}% — click to hear pitch">
         <div class="chroma-bar-wrap">
           <span class="chroma-marker" aria-hidden="true">${marker}</span>
           <div class="chroma-bar" style="height: ${pct}%;"></div>
@@ -766,13 +684,9 @@ function renderChromagram(track) {
     const scaleNames = keyInfo.scalePitchClasses.map((pc) => labels[pc]).join(' · ');
     dom.chromaScaleNotes.textContent = `SCALE (${formatKeyName(keyInfo, state.accidentalStyle, true)}): ${scaleNames}`;
   } else {
-    dom.chromaScaleNotes.textContent = 'SCALE TONES: —';
+    dom.chromaScaleNotes.textContent = 'SCALE: —';
   }
 }
-
-/* ==========================================================================
-   CAMELOT WHEEL & COMPATIBLE TRANSITIONS PANEL
-   ========================================================================== */
 
 function renderCamelotTransitions() {
   const inspected = getKeyByCamelot(state.wheelCamelot);
@@ -786,7 +700,7 @@ function renderCamelotTransitions() {
     inspected,
     state.accidentalStyle,
     false
-  )} (Open ${inspected.openKey.toUpperCase()})`;
+  )}`;
 
   const compat = getCompatibleKeys(inspected.camelot);
   const items = [
@@ -801,7 +715,7 @@ function renderCamelotTransitions() {
     .map((item) => {
       const isExact = item.relation === 'exact';
       const keyLabel = formatKeyName(item, state.accidentalStyle, false);
-      return `<button type="button" class="compat-item${isExact ? ' is-exact' : ''}" data-compat-camelot="${item.camelot}" title="Inspect ${item.camelot} and audition ${escapeHtml(keyLabel)} triad chord">
+      return `<button type="button" class="compat-item${isExact ? ' is-exact' : ''}" data-compat-camelot="${item.camelot}" title="Inspect ${item.camelot} and hear ${escapeHtml(keyLabel)} triad">
         <span class="compat-rel">${escapeHtml(item.label)}</span>
         <span class="compat-key-val">${item.camelot} · ${escapeHtml(keyLabel)}</span>
       </button>`;
@@ -810,17 +724,19 @@ function renderCamelotTransitions() {
 }
 
 /* ==========================================================================
-   WAVEFORM CANVAS WITH BEAT-GRID TICK OVERLAY & SCRUBBING
+   WAVEFORM CANVAS & PLAYHEAD
    ========================================================================== */
 
 function drawWaveformCanvas() {
   const canvas = dom.waveformCanvas;
   if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+
   const ctx = canvas.getContext('2d');
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const rect = canvas.getBoundingClientRect();
-  const w = Math.max(300, Math.floor(rect.width || 900));
-  const h = Math.max(56, Math.floor(rect.height || 72));
+  const w = Math.max(240, Math.floor(rect.width));
+  const h = Math.max(44, Math.floor(rect.height));
 
   if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
     canvas.width = w * dpr;
@@ -831,7 +747,6 @@ function drawWaveformCanvas() {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
 
-  // Subtle dark studio grid center hairline
   ctx.strokeStyle = '#222222';
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -849,12 +764,11 @@ function drawWaveformCanvas() {
   const duration = track.analysis.durationSec;
   const bpm = track.effectiveBpm;
 
-  // Draw beat-grid vertical tick marks behind waveform when track isn't too dense
+  // Subtle bar / beat tick marks behind waveform
   if (bpm > 0 && duration > 0) {
     const periodSec = 60 / bpm;
     const totalBeats = duration / periodSec;
-    // Skip beat ticks if > 400 beats would look solid; show 4-beat bar markers instead
-    const stepBeats = totalBeats > 260 ? 4 : 1;
+    const stepBeats = totalBeats > 240 ? 4 : 1;
     const offset = track.beatOffsetSec % periodSec;
 
     for (let b = 0; ; b += stepBeats) {
@@ -862,16 +776,15 @@ function drawWaveformCanvas() {
       if (t > duration) break;
       const x = (t / duration) * w;
       const isBar = b % 4 === 0;
-      ctx.strokeStyle = isBar ? 'rgba(255, 255, 255, 0.24)' : 'rgba(255, 255, 255, 0.08)';
+      ctx.strokeStyle = isBar ? 'rgba(255, 255, 255, 0.22)' : 'rgba(255, 255, 255, 0.07)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(x, isBar ? 0 : h * 0.14);
-      ctx.lineTo(x, isBar ? h : h * 0.86);
+      ctx.moveTo(x, isBar ? 0 : h * 0.16);
+      ctx.lineTo(x, isBar ? h : h * 0.84);
       ctx.stroke();
     }
   }
 
-  // Draw crisp monochrome mirrored waveform bars
   const barCount = peaks.length;
   const barStep = w / barCount;
   const barWidth = Math.max(1, barStep - 0.7);
@@ -894,6 +807,7 @@ function updatePlayheadVisuals() {
   if (!track) {
     dom.timelineProgressBar.style.width = '0%';
     dom.timelinePlayhead.style.left = '0%';
+    dom.timelineTime.textContent = '0:00 / 0:00';
     return;
   }
   const dur = track.analysis.durationSec || 1;
@@ -902,8 +816,9 @@ function updatePlayheadVisuals() {
 
   dom.timelineProgressBar.style.width = `${pct}%`;
   dom.timelinePlayhead.style.left = `${pct}%`;
-  dom.timelineCurrentTime.textContent = formatTime(now, true);
-  dom.waveformScrubber.setAttribute('aria-valuenow', String(Math.round(now * 10) / 10));
+  dom.timelineTime.textContent = `${formatTime(now)} / ${formatTime(dur)}`;
+  dom.waveformScrubber.setAttribute('aria-valuemax', String(Math.round(dur)));
+  dom.waveformScrubber.setAttribute('aria-valuenow', String(Math.round(now)));
 }
 
 function startAnimationLoop() {
@@ -921,84 +836,30 @@ function startAnimationLoop() {
 }
 
 /* ==========================================================================
-   SESSION QUEUE TABLE & SORTING
+   BATCH QUEUE (ONLY VISIBLE WHEN 2+ TRACKS LOADED)
    ========================================================================== */
-
-function getSortedTracks() {
-  const arr = [...state.tracks];
-  switch (state.sortMode) {
-    case 'bpm-asc':
-      return arr.sort((a, b) => a.effectiveBpm - b.effectiveBpm);
-    case 'bpm-desc':
-      return arr.sort((a, b) => b.effectiveBpm - a.effectiveBpm);
-    case 'camelot':
-      return arr.sort((a, b) => {
-        const ka = a.effectiveKeyInfo;
-        const kb = b.effectiveKeyInfo;
-        if (ka.camelotNum !== kb.camelotNum) return ka.camelotNum - kb.camelotNum;
-        return ka.camelotLetter.localeCompare(kb.camelotLetter);
-      });
-    case 'name':
-      return arr.sort((a, b) => a.name.localeCompare(b.name));
-    case 'order':
-    default:
-      return arr.sort((a, b) => a.orderIndex - b.orderIndex);
-  }
-}
 
 function renderQueue() {
   const count = state.tracks.length;
-  dom.queueSection.classList.toggle('hidden', count === 0);
-  if (count === 0) return;
+  dom.queueSection.classList.toggle('hidden', count < 2);
+  if (count < 2) return;
 
-  dom.queueCountText.textContent = `${count} Track${count === 1 ? '' : 's'} Analyzed`;
+  dom.queueCountText.textContent = `${count} Tracks Analyzed`;
 
-  const activeTrack = getActiveTrack();
-  const activeCamelot = activeTrack?.effectiveKeyInfo?.camelot || null;
-  const sorted = getSortedTracks();
-
-  dom.queueTableBody.innerHTML = sorted
-    .map((track, idx) => {
+  dom.queueTableBody.innerHTML = state.tracks
+    .map((track) => {
       const isActive = track.id === state.activeTrackId;
       const keyInfo = track.effectiveKeyInfo;
       const keyLabel = formatKeyName(keyInfo, state.accidentalStyle, false);
 
-      // Show harmonic mixing badge relative to the currently selected track!
-      let compatHtml = '';
-      if (activeCamelot && !isActive && count > 1) {
-        const rel = getHarmonicRelation(activeCamelot, keyInfo.camelot);
-        if (rel) {
-          compatHtml = `<span class="compat-tag" title="Harmonically compatible with active track: ${escapeHtml(rel.label)}">${escapeHtml(rel.code)}</span>`;
-        }
-      }
-
-      const modTag =
-        track.bpmMultiplier === 0.5
-          ? '<span class="bpm-mod-tag">÷2</span>'
-          : track.bpmMultiplier === 2
-            ? '<span class="bpm-mod-tag">×2</span>'
-            : '';
-
-      const bpmConf = track.analysis.bpm.confidence;
-      const keyConf = track.analysis.key.confidence;
-
       return `<div class="queue-row${isActive ? ' active-row' : ''}" data-track-id="${track.id}" role="listitem" tabindex="0" aria-current="${isActive ? 'true' : 'false'}">
-        <div class="q-col-idx mono-cell">${String(idx + 1).padStart(2, '0')}</div>
-        <div class="q-col-name q-name-wrap">
-          <span class="q-track-name" title="${escapeHtml(track.name)}">${escapeHtml(track.name)}</span>
-          ${compatHtml}
-        </div>
-        <div class="q-col-dur mono-cell">${formatTime(track.analysis.durationSec)}</div>
-        <div class="q-col-bpm bpm-cell">${track.effectiveBpm.toFixed(1)}${modTag}</div>
+        <div class="q-col-name q-track-name" title="${escapeHtml(track.name)}">${escapeHtml(track.name)}</div>
+        <div class="q-col-bpm bpm-cell">${formatBpmPlain(track.effectiveBpm)}</div>
         <div class="q-col-key">${escapeHtml(keyLabel)}</div>
-        <div class="q-col-cam">
-          <span class="camelot-pill">${keyInfo.camelot}</span>
-          <span class="openkey-mini">${keyInfo.openKey}</span>
-        </div>
-        <div class="q-col-conf mono-cell">${bpmConf}% / ${keyConf}%</div>
+        <div class="q-col-cam"><span class="camelot-pill">${keyInfo.camelot}</span></div>
         <div class="q-col-act">
-          <button type="button" class="btn-row-copy" data-copy-id="${track.id}" title="Copy BPM & Key tag">COPY</button>
-          <button type="button" class="btn-remove-row" data-remove-id="${track.id}" title="Remove track from queue" aria-label="Remove ${escapeHtml(track.name)}">×</button>
+          <button type="button" class="btn-row-copy" data-copy-id="${track.id}" title="Copy BPM & Key">COPY</button>
+          <button type="button" class="btn-remove-row" data-remove-id="${track.id}" title="Remove track" aria-label="Remove ${escapeHtml(track.name)}">×</button>
         </div>
       </div>`;
     })
@@ -1006,26 +867,18 @@ function renderQueue() {
 }
 
 /* ==========================================================================
-   TEMPO MODIFIERS, TAP TEMPO & METRONOME GRID ADJUSTMENTS
+   TEMPO MODIFIERS & MANUAL TAP TEMPO
    ========================================================================== */
 
 function toggleOctaveMultiplier(mult) {
   const track = getActiveTrack();
-  if (!track) {
-    if (state.tapBpm) {
-      state.tapBpm = Math.round(state.tapBpm * mult * 10) / 10;
-      engine.updateTempoGrid(state.tapBpm, 0);
-      renderDeck();
-    }
-    return;
-  }
+  if (!track) return;
 
   const baseBpm = track.bpmOverride ?? (track.analysis.bpm.bpm || 120);
   track.bpmMultiplier = track.bpmMultiplier === mult ? 1 : mult;
   track.effectiveBpm = Math.round(baseBpm * track.bpmMultiplier * 10) / 10;
   engine.updateTempoGrid(track.effectiveBpm, track.beatOffsetSec);
-  renderDeck();
-  renderQueue();
+  renderAll();
 }
 
 function resetTrackBpm() {
@@ -1033,30 +886,27 @@ function resetTrackBpm() {
   if (!track) return;
   track.bpmMultiplier = 1;
   track.bpmOverride = null;
-  track.effectiveBpm = track.analysis.bpm.bpm || 120;
+  track.effectiveBpm = track.analysis.bpm.bpm || 0;
   state.tapTimes = [];
   state.tapBpm = null;
-  dom.tapFeedbackBar.classList.add('hidden');
-  engine.updateTempoGrid(track.effectiveBpm, track.beatOffsetSec);
-  renderDeck();
-  renderQueue();
+  dom.tapReadout.textContent = 'Ready';
+  dom.btnClearTap.classList.add('hidden');
+  engine.updateTempoGrid(track.effectiveBpm || 120, track.beatOffsetSec);
+  renderAll();
 }
 
 function handleTapTempo() {
   const now = performance.now();
-  // Auto-reset tap history after 2.2 seconds of pause
   if (state.tapTimes.length > 0 && now - state.tapTimes[state.tapTimes.length - 1] > 2200) {
     state.tapTimes = [];
   }
   state.tapTimes.push(now);
-  if (state.tapTimes.length > 9) {
-    state.tapTimes.shift();
-  }
+  if (state.tapTimes.length > 9) state.tapTimes.shift();
 
-  dom.tapFeedbackBar.classList.remove('hidden');
+  dom.btnClearTap.classList.remove('hidden');
 
   if (state.tapTimes.length < 2) {
-    dom.tapFeedbackText.textContent = 'TAP AGAIN ON THE BEAT... (1 tap)';
+    dom.tapReadout.textContent = 'Tap again...';
     return;
   }
 
@@ -1069,7 +919,7 @@ function handleTapTempo() {
 
   const bpm = Math.round((60000 / avgMs) * 10) / 10;
   state.tapBpm = bpm;
-  dom.tapFeedbackText.textContent = `TAP TEMPO: ${bpm.toFixed(1)} BPM (${state.tapTimes.length} taps)`;
+  dom.tapReadout.textContent = `${formatBpmPlain(bpm)} BPM (${state.tapTimes.length} taps)`;
 
   const track = getActiveTrack();
   if (track) {
@@ -1077,38 +927,14 @@ function handleTapTempo() {
     track.bpmMultiplier = 1;
     track.effectiveBpm = bpm;
     engine.updateTempoGrid(bpm, track.beatOffsetSec);
+    renderAll();
   } else {
     engine.updateTempoGrid(bpm, 0);
   }
-  renderDeck();
-  if (track) renderQueue();
-}
-
-function nudgeBeatOffset(deltaSec) {
-  const track = getActiveTrack();
-  if (!track) return;
-  const period = 60 / Math.max(30, track.effectiveBpm);
-  const next = (((track.beatOffsetSec + deltaSec) % period) + period) % period;
-  track.beatOffsetSec = Math.round(next * 1000) / 1000;
-  engine.updateTempoGrid(track.effectiveBpm, track.beatOffsetSec);
-  dom.beatOffsetReadout.textContent = `GRID ${track.beatOffsetSec.toFixed(3)}s`;
-  drawWaveformCanvas();
-}
-
-function snapBeatOneToPlayhead() {
-  const track = getActiveTrack();
-  if (!track) return;
-  const period = 60 / Math.max(30, track.effectiveBpm);
-  const nowSec = engine.getCurrentTime();
-  track.beatOffsetSec = Math.round((nowSec % period) * 1000) / 1000;
-  engine.updateTempoGrid(track.effectiveBpm, track.beatOffsetSec);
-  dom.beatOffsetReadout.textContent = `GRID ${track.beatOffsetSec.toFixed(3)}s`;
-  drawWaveformCanvas();
-  showToast(`Beat 1 snapped to ${track.beatOffsetSec.toFixed(3)}s`);
 }
 
 /* ==========================================================================
-   METRONOME BEAT VISUAL FLASH
+   METRONOME BEAT VISUAL PULSE
    ========================================================================== */
 
 let beatFlashTimeout = null;
@@ -1123,12 +949,13 @@ engine.onMetronomeBeat = (beatNum, isDownbeat) => {
     window.clearTimeout(beatFlashTimeout);
     beatFlashTimeout = window.setTimeout(() => {
       dom.deckLed.classList.remove('beat-flash');
-    }, 95);
+    }, 90);
   }
 };
 
 engine.onTrackEnded = () => {
-  renderDeck();
+  const track = getActiveTrack();
+  if (track) renderDeck(track);
 };
 
 /* ==========================================================================
@@ -1136,23 +963,26 @@ engine.onTrackEnded = () => {
    ========================================================================== */
 
 function bindEvents() {
-  // File & Folder Pickers
-  dom.btnSelectFiles.addEventListener('click', (e) => {
-    e.stopPropagation();
+  const openFilePicker = (e) => {
+    if (e) e.stopPropagation();
     dom.fileInput.value = '';
     dom.fileInput.click();
-  });
-
-  dom.btnSelectFolder.addEventListener('click', (e) => {
-    e.stopPropagation();
+  };
+  const openFolderPicker = (e) => {
+    if (e) e.stopPropagation();
     dom.folderInput.value = '';
     dom.folderInput.click();
-  });
+  };
+
+  dom.btnSelectFiles.addEventListener('click', openFilePicker);
+  dom.btnSelectFolder.addEventListener('click', openFolderPicker);
+  dom.btnAddMoreBar.addEventListener('click', openFilePicker);
+  dom.btnAddFolderBar.addEventListener('click', openFolderPicker);
+  dom.btnClearSession.addEventListener('click', clearSession);
 
   dom.dropzoneClick.addEventListener('click', (e) => {
     if (e.target.closest('button')) return;
-    dom.fileInput.value = '';
-    dom.fileInput.click();
+    openFilePicker();
   });
 
   dom.fileInput.addEventListener('change', (e) => {
@@ -1163,12 +993,8 @@ function bindEvents() {
     if (e.target.files?.length) ingestFiles(e.target.files);
   });
 
-  dom.btnAddMore.addEventListener('click', () => {
-    dom.fileInput.value = '';
-    dom.fileInput.click();
-  });
-
-  dom.btnLoadDemo.addEventListener('click', () => {
+  dom.btnLoadDemo.addEventListener('click', (e) => {
+    e.stopPropagation();
     loadDemoBeat();
   });
 
@@ -1176,150 +1002,94 @@ function bindEvents() {
     dom.errorsBanner.classList.add('hidden');
   });
 
-  dom.btnHeaderClear.addEventListener('click', clearSession);
+  // Whole-Page Drag & Drop (works before AND after loading!)
+  let windowDragDepth = 0;
+  const hasFileDrag = (e) =>
+    Boolean(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
 
-  // Drag & Drop
-  let dragCounter = 0;
-  dom.dropzone.addEventListener('dragenter', (e) => {
+  window.addEventListener('dragenter', (e) => {
+    if (!hasFileDrag(e)) return;
     e.preventDefault();
-    dragCounter++;
+    windowDragDepth++;
+    dom.pageDropOverlay.classList.remove('hidden');
     dom.dropzone.classList.add('drag-over');
+    dom.compactActionBar.classList.add('drag-over');
   });
-  dom.dropzone.addEventListener('dragover', (e) => {
+
+  window.addEventListener('dragover', (e) => {
+    if (!hasFileDrag(e)) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
   });
-  dom.dropzone.addEventListener('dragleave', () => {
-    dragCounter = Math.max(0, dragCounter - 1);
-    if (dragCounter === 0) dom.dropzone.classList.remove('drag-over');
+
+  window.addEventListener('dragleave', (e) => {
+    if (!hasFileDrag(e)) return;
+    windowDragDepth = Math.max(0, windowDragDepth - 1);
+    if (windowDragDepth === 0) {
+      dom.pageDropOverlay.classList.add('hidden');
+      dom.dropzone.classList.remove('drag-over');
+      dom.compactActionBar.classList.remove('drag-over');
+    }
   });
-  dom.dropzone.addEventListener('drop', async (e) => {
+
+  window.addEventListener('drop', async (e) => {
+    if (!hasFileDrag(e)) return;
     e.preventDefault();
-    dragCounter = 0;
+    windowDragDepth = 0;
+    dom.pageDropOverlay.classList.add('hidden');
     dom.dropzone.classList.remove('drag-over');
+    dom.compactActionBar.classList.remove('drag-over');
     if (e.dataTransfer) {
       const files = await collectFilesFromDataTransfer(e.dataTransfer);
       if (files.length > 0) ingestFiles(files);
     }
   });
 
-  // Deck Track Navigation & Copy Tag
+  // Deck Navigation & 1-Click Copy Buttons
   dom.btnPrevTrack.addEventListener('click', () => navigateTrack(-1));
   dom.btnNextTrack.addEventListener('click', () => navigateTrack(1));
 
-  const copyActiveTag = () => {
+  dom.btnCopyAll.addEventListener('click', () => {
     const track = getActiveTrack();
     if (!track) return;
     const tag = formatTrackTag(track.effectiveBpm, track.effectiveKeyInfo, state.accidentalStyle);
-    copyTextToClipboard(tag, `Copied tag: ${tag}`);
-  };
-  dom.btnCopyTagTop.addEventListener('click', copyActiveTag);
-  dom.btnCopyTagStrip.addEventListener('click', copyActiveTag);
+    copyTextToClipboard(tag, `Copied: ${tag}`);
+  });
 
-  // BPM Controls
+  dom.btnCopyBpm.addEventListener('click', () => {
+    const track = getActiveTrack();
+    if (!track || !(track.effectiveBpm > 0)) return;
+    const text = `${formatBpmPlain(track.effectiveBpm)} BPM`;
+    copyTextToClipboard(text, `Copied: ${text}`);
+  });
+
+  dom.btnCopyKey.addEventListener('click', () => {
+    const track = getActiveTrack();
+    if (!track) return;
+    const k = track.effectiveKeyInfo;
+    const text = `${formatKeyName(k, state.accidentalStyle, false)} (${k.camelot})`;
+    copyTextToClipboard(text, `Copied: ${text}`);
+  });
+
+  // BPM & Key Readout Toggles
   dom.btnHalfBpm.addEventListener('click', () => toggleOctaveMultiplier(0.5));
   dom.btnDoubleBpm.addEventListener('click', () => toggleOctaveMultiplier(2));
   dom.btnResetBpm.addEventListener('click', resetTrackBpm);
-  dom.btnTapTempo.addEventListener('click', handleTapTempo);
-  dom.btnClearTap.addEventListener('click', () => {
-    state.tapTimes = [];
-    state.tapBpm = null;
-    dom.tapFeedbackBar.classList.add('hidden');
-    if (getActiveTrack()) {
-      resetTrackBpm();
-    } else {
-      engine.updateTempoGrid(state.standbyBpm, 0);
-      renderDeck();
-    }
-  });
 
-  dom.bpmCandidatesList.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-bpm-cand]');
-    if (!btn) return;
-    const track = getActiveTrack();
-    if (!track) return;
-    const bpm = parseFloat(btn.dataset.bpmCand);
-    if (!Number.isFinite(bpm)) return;
-    track.bpmMultiplier = 1;
-    track.bpmOverride = Math.abs(bpm - track.analysis.bpm.bpm) < 0.06 ? null : bpm;
-    track.effectiveBpm = bpm;
-    state.tapBpm = null;
-    dom.tapFeedbackBar.classList.add('hidden');
-    engine.updateTempoGrid(bpm, track.beatOffsetSec);
-    renderDeck();
-    renderQueue();
-    showToast(`Active tempo set to ${bpm.toFixed(1)} BPM`);
-  });
-
-  // Key Controls
   dom.btnEnharmonicToggle.addEventListener('click', () => {
     const order = ['auto', 'sharp', 'flat'];
-    const nextIdx = (order.indexOf(state.accidentalStyle) + 1) % order.length;
-    state.accidentalStyle = order[nextIdx];
+    state.accidentalStyle = order[(order.indexOf(state.accidentalStyle) + 1) % order.length];
     if (camelotWheel) camelotWheel.setAccidentalStyle(state.accidentalStyle);
-    renderDeck();
-    renderQueue();
+    renderAll();
   });
 
-  dom.btnPlayChord.addEventListener('click', () => {
-    const keyInfo = getEffectiveKeyInfo();
-    if (!keyInfo) return;
-    engine.playKeyChord(keyInfo.pitchClass, keyInfo.mode);
-    showToast(`Auditioning ${formatKeyName(keyInfo, state.accidentalStyle, false)} (${keyInfo.camelot}) chord`);
-  });
-
-  dom.btnTonicDrone.addEventListener('click', () => {
-    const keyInfo = getEffectiveKeyInfo();
-    if (!keyInfo) return;
-    const isOn = engine.toggleTonicDrone(keyInfo.pitchClass, keyInfo.mode);
-    dom.btnTonicDrone.setAttribute('aria-pressed', String(isOn));
-    dom.btnTonicDrone.classList.toggle('deck-pill-active', isOn);
-    showToast(
-      isOn
-        ? `Tonic drone ON — ${formatKeyName(keyInfo, state.accidentalStyle, false)}`
-        : 'Tonic drone OFF'
-    );
-  });
-
-  // Clicking any top-4 key candidate auditions THAT chord immediately & switches active key!
-  dom.keyCandidatesList.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-key-cand]');
-    if (!btn) return;
-    const track = getActiveTrack();
-    const keyInfo = getKeyByCamelot(btn.dataset.keyCand);
-    if (!keyInfo) return;
-
-    engine.playKeyChord(keyInfo.pitchClass, keyInfo.mode);
-    if (track) {
-      track.effectiveKeyInfo = keyInfo;
-      track.keyOverridden = keyInfo.camelot !== track.analysis.key.camelot;
-      state.wheelCamelot = keyInfo.camelot;
-      if (camelotWheel) {
-        camelotWheel.setDetected(track.analysis.key.camelot);
-        camelotWheel.setActive(keyInfo.camelot);
-      }
-      if (engine.droneActive) {
-        engine.startTonicDrone(keyInfo.pitchClass, keyInfo.mode);
-      }
-      renderDeck();
-      renderQueue();
-    }
-    showToast(`Auditioning ${formatKeyName(keyInfo, state.accidentalStyle, false)} (${keyInfo.camelot})`);
-  });
-
-  // Transport & Metronome
+  // Player & Ear-Check Controls
   dom.btnPlayPause.addEventListener('click', () => {
     if (!getActiveTrack()) return;
     engine.togglePlay();
     if (engine.isPlaying) startAnimationLoop();
-    renderDeck();
-  });
-
-  dom.btnRestart.addEventListener('click', () => {
-    if (!getActiveTrack()) return;
-    engine.restartTrack();
-    startAnimationLoop();
-    renderDeck();
+    const track = getActiveTrack();
+    if (track) renderDeck(track);
   });
 
   dom.btnMetronome.addEventListener('click', () => {
@@ -1327,12 +1097,16 @@ function bindEvents() {
     if (!on && dom.metroDots) {
       dom.metroDots.querySelectorAll('.metro-dot').forEach((d) => d.classList.remove('lit'));
     }
-    renderDeck();
+    const track = getActiveTrack();
+    if (track) renderDeck(track);
   });
 
-  dom.btnNudgeMinus.addEventListener('click', () => nudgeBeatOffset(-0.02));
-  dom.btnNudgePlus.addEventListener('click', () => nudgeBeatOffset(0.02));
-  dom.btnSnapBeat.addEventListener('click', snapBeatOneToPlayhead);
+  dom.btnPlayChord.addEventListener('click', () => {
+    const keyInfo = getEffectiveKeyInfo();
+    if (!keyInfo) return;
+    engine.playKeyChord(keyInfo.pitchClass, keyInfo.mode);
+    showToast(`Playing ${formatKeyName(keyInfo, state.accidentalStyle, false)} (${keyInfo.camelot})`);
+  });
 
   dom.volumeSlider.addEventListener('input', (e) => {
     engine.setVolume(parseFloat(e.target.value));
@@ -1378,23 +1152,71 @@ function bindEvents() {
     }
   });
 
-  // Chromagram Single-Pitch Click Preview
+  // Details Drawer: Runner-Up BPM, Runner-Up Keys, Tap Tempo, Chromagram, Camelot Wheel
+  dom.bpmCandidatesList.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-bpm-cand]');
+    if (!btn) return;
+    const track = getActiveTrack();
+    if (!track) return;
+    const bpm = parseFloat(btn.dataset.bpmCand);
+    if (!Number.isFinite(bpm)) return;
+    track.bpmMultiplier = 1;
+    track.bpmOverride = Math.abs(bpm - track.analysis.bpm.bpm) < 0.06 ? null : bpm;
+    track.effectiveBpm = bpm;
+    state.tapBpm = null;
+    dom.tapReadout.textContent = 'Ready';
+    dom.btnClearTap.classList.add('hidden');
+    engine.updateTempoGrid(bpm, track.beatOffsetSec);
+    renderAll();
+    showToast(`Switched BPM to ${formatBpmPlain(bpm)}`);
+  });
+
+  dom.keyCandidatesList.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-key-cand]');
+    if (!btn) return;
+    const track = getActiveTrack();
+    const keyInfo = getKeyByCamelot(btn.dataset.keyCand);
+    if (!keyInfo) return;
+
+    engine.playKeyChord(keyInfo.pitchClass, keyInfo.mode);
+    if (track) {
+      track.effectiveKeyInfo = keyInfo;
+      track.keyOverridden = keyInfo.camelot !== track.analysis.key.camelot;
+      state.wheelCamelot = keyInfo.camelot;
+      if (camelotWheel) {
+        camelotWheel.setDetected(track.analysis.key.camelot);
+        camelotWheel.setActive(keyInfo.camelot);
+      }
+      renderAll();
+    }
+    showToast(`Playing ${formatKeyName(keyInfo, state.accidentalStyle, false)} (${keyInfo.camelot})`);
+  });
+
+  dom.btnTapTempo.addEventListener('click', handleTapTempo);
+  dom.btnClearTap.addEventListener('click', () => {
+    state.tapTimes = [];
+    state.tapBpm = null;
+    dom.tapReadout.textContent = 'Ready';
+    dom.btnClearTap.classList.add('hidden');
+    if (getActiveTrack()) {
+      resetTrackBpm();
+    } else {
+      engine.updateTempoGrid(120, 0);
+    }
+  });
+
   dom.chromaChart.addEventListener('click', (e) => {
     const col = e.target.closest('[data-pc]');
     if (!col) return;
     const pc = parseInt(col.dataset.pc, 10);
-    if (Number.isFinite(pc)) {
-      engine.playPitchNote(pc);
-    }
+    if (Number.isFinite(pc)) engine.playPitchNote(pc);
   });
 
-  // Camelot Transitions Panel Click
   dom.compatList.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-compat-camelot]');
     if (!btn) return;
-    const code = btn.dataset.compatCamelot;
     if (camelotWheel) {
-      camelotWheel.setActive(code, { notify: true });
+      camelotWheel.setActive(btn.dataset.compatCamelot, { notify: true });
     }
   });
 
@@ -1402,18 +1224,11 @@ function bindEvents() {
     const track = getActiveTrack();
     if (!track) return;
     state.wheelCamelot = track.effectiveKeyInfo.camelot;
-    if (camelotWheel) {
-      camelotWheel.setActive(state.wheelCamelot);
-    }
+    if (camelotWheel) camelotWheel.setActive(state.wheelCamelot);
     renderCamelotTransitions();
   });
 
-  // Queue Sort, Row Select, Copy, Remove & Batch Exports
-  dom.queueSortSelect.addEventListener('change', (e) => {
-    state.sortMode = e.target.value;
-    renderQueue();
-  });
-
+  // Batch Queue Interactions & Exports
   dom.queueTableBody.addEventListener('click', (e) => {
     const removeBtn = e.target.closest('[data-remove-id]');
     if (removeBtn) {
@@ -1451,7 +1266,7 @@ function bindEvents() {
 
   dom.btnExportCsv.addEventListener('click', () => {
     if (state.tracks.length === 0) return;
-    const csv = exportQueueToCsv(getSortedTracks(), state.accidentalStyle);
+    const csv = exportQueueToCsv(state.tracks, state.accidentalStyle);
     const stamp = new Date().toISOString().slice(0, 10);
     triggerFileDownload(`saint-gordon-bpm-key-${stamp}.csv`, csv, 'text/csv;charset=utf-8');
     showToast(`Exported CSV (${state.tracks.length} tracks)`);
@@ -1459,13 +1274,13 @@ function bindEvents() {
 
   dom.btnExportMd.addEventListener('click', () => {
     if (state.tracks.length === 0) return;
-    const md = exportQueueToMarkdown(getSortedTracks(), state.accidentalStyle);
+    const md = exportQueueToMarkdown(state.tracks, state.accidentalStyle);
     const stamp = new Date().toISOString().slice(0, 10);
     triggerFileDownload(`saint-gordon-bpm-key-${stamp}.md`, md, 'text/markdown;charset=utf-8');
-    showToast(`Exported Markdown (${state.tracks.length} tracks)`);
+    showToast(`Exported Report (${state.tracks.length} tracks)`);
   });
 
-  // Global Studio Keyboard Shortcuts
+  // Clean Keyboard Shortcuts
   document.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const tag = (e.target?.tagName || '').toLowerCase();
@@ -1477,40 +1292,21 @@ function bindEvents() {
     if (e.code === 'Space') {
       if (!getActiveTrack()) return;
       e.preventDefault();
-      engine.togglePlay();
-      if (engine.isPlaying) startAnimationLoop();
-      renderDeck();
+      dom.btnPlayPause.click();
     } else if (key === 'm') {
+      if (!getActiveTrack() && !state.tapBpm) return;
       e.preventDefault();
       dom.btnMetronome.click();
     } else if (key === 'c') {
       e.preventDefault();
       dom.btnPlayChord.click();
-    } else if (key === 'd') {
-      e.preventDefault();
-      dom.btnTonicDrone.click();
     } else if (key === 't') {
       e.preventDefault();
+      if (!dom.moreDetailsDrawer.open) dom.moreDetailsDrawer.open = true;
       handleTapTempo();
-    } else if (key === 'b') {
-      if (!getActiveTrack()) return;
-      e.preventDefault();
-      snapBeatOneToPlayhead();
-    } else if (key === 'h') {
-      if (!getActiveTrack()) return;
-      e.preventDefault();
-      const track = getActiveTrack();
-      if (track.bpmMultiplier === 1) toggleOctaveMultiplier(0.5);
-      else if (track.bpmMultiplier === 0.5) toggleOctaveMultiplier(2);
-      else resetTrackBpm();
-    } else if (key === 'r') {
-      if (!getActiveTrack()) return;
-      e.preventDefault();
-      dom.btnRestart.click();
     }
   });
 
-  // Redraw waveform sharply on viewport resize
   let resizeTimer = null;
   window.addEventListener('resize', () => {
     window.clearTimeout(resizeTimer);
@@ -1536,7 +1332,7 @@ function init() {
   });
 
   bindEvents();
-  renderDeck();
+  renderAll();
 }
 
 init();

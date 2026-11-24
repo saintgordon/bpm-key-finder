@@ -6,14 +6,18 @@
  *
  * Algorithms:
  *  1. Anti-aliased mono downsampling (~11,025–12,000 Hz) via zero-phase triangular FIR decimation.
- *  2. Multi-band onset strength function (40–220 Hz low + 220–4000 Hz mid/high) using
- *     1024-pt Hann-windowed radix-2 FFT (256-pt hop) + log spectral compression + adaptive local mean.
- *  3. Unbiased autocorrelation over 60–195 BPM + forward harmonic comb reinforcement +
- *     gentle perceptual tempo prior (centered at 120 BPM) + fine phase-folded tempo refinement (0.1 BPM)
- *     and beat-1 offset estimation (beatOffsetSec).
- *  4. 4096-pt Hann-windowed radix-2 FFT chromagram across active non-silent body (10%–90%),
- *     frame-RMS weighted, 55–2600 Hz with micro-tuning offset compensation and Gaussian pitch binning,
- *     correlated via Pearson's r against Sha'ath modern pop/electronic/hip-hop key profiles.
+ *  2. 4-Band SuperFlux Onset Detection Function (Böck & Widmer 2013):
+ *     1024-pt Hann FFT / 256-pt hop across 4 drum bands (Kick 40–130 Hz, Snare body 130–400 Hz,
+ *     Snare crack/clap 400–2000 Hz, Hi-hats 2000–5200 Hz) with 2-frame frequency max-filter
+ *     to suppress vocal vibrato & synth wobble, RMS auto-reweighting, and adaptive local-mean threshold.
+ *  3. Multi-Window Autocorrelation + Harmonic Comb Tempogram Consensus (60–195 BPM) with
+ *     active-body trimming, pulse-train phase-fold octave/half-time verification,
+ *     ultra-fine 0.02 BPM phase-fold refinement, clean DAW integer snap, and beat-1 offset estimation.
+ *  4. High-Resolution 8192-pt FFT HPCP Musical Key Detection + Bass/808 Root Disambiguator:
+ *     Local spectral noise-floor tonal peak isolation, parabolic sub-bin interpolation,
+ *     global A4 micro-tuning compensation, harmonic overtone attenuation, per-frame L2-normalized chroma,
+ *     dedicated 40–210 Hz bass-root chromagram with structural anchor weighting, and
+ *     Multi-Profile Ensemble scoring (Sha'ath EDMA + Temperley + Krumhansl-Kessler).
  *  5. Complete 24-entry Camelot & Open Key wheel mappings, harmonic compatibility matrix,
  *     delay timing strip, waveform peaks, and CSV/Markdown batch exporters.
  */
@@ -57,10 +61,18 @@ const CAMELOT_NUM_MINOR = [5, 12, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10];
 export const MAJOR_SCALE_INTERVALS = [0, 2, 4, 5, 7, 9, 11];
 export const MINOR_SCALE_INTERVALS = [0, 2, 3, 5, 7, 8, 10];
 
-// Sha'ath (2011) pop / electronic / modern master key-profile templates
-// Strongly captures Aeolian (natural minor) flat-7th & modern pop/hip-hop tonalities
-const PROFILE_MAJOR = [6.6, 2.0, 3.5, 2.3, 4.6, 4.0, 2.5, 5.2, 2.4, 3.7, 2.3, 3.4];
-const PROFILE_MINOR = [6.5, 2.7, 3.5, 5.4, 2.6, 3.5, 2.5, 5.2, 4.0, 2.7, 4.3, 3.2];
+// Multi-Profile Ensemble Key Templates (all normalized to equal variance via Pearson's r):
+// 1. Sha'ath (2011) EDMA — modern pop, electronic, hip-hop, R&B (captures Aeolian flat-7th cleanly)
+const PROFILE_SHAATH_MAJOR = [6.6, 2.0, 3.5, 2.3, 4.6, 4.0, 2.5, 5.2, 2.4, 3.7, 2.3, 3.4];
+const PROFILE_SHAATH_MINOR = [6.5, 2.7, 3.5, 5.4, 2.6, 3.5, 2.5, 5.2, 4.0, 2.7, 4.3, 3.2];
+
+// 2. Temperley (2007) — balanced rock/pop/indie tonal distribution
+const PROFILE_TEMPERLEY_MAJOR = [5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0];
+const PROFILE_TEMPERLEY_MINOR = [5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 3.2, 2.8];
+
+// 3. Krumhansl-Kessler (1982) — classic psychoacoustic harmonic hierarchy
+const PROFILE_KK_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+const PROFILE_KK_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
 
 function wrapCamelotNum(n) {
   return ((((n - 1) % 12) + 12) % 12) + 1;
@@ -559,7 +571,7 @@ export function computeWaveformPeaks(channelsOrMono, numBuckets = 320) {
 }
 
 /* ==========================================================================
-   BPM DETECTION ENGINE (MULTI-BAND ONSET + AUTOCORRELATION + PHASE REFINE)
+   BPM DETECTION ENGINE (4-BAND SUPERFLUX + MULTI-WINDOW CONSENSUS + PHASE REFINE)
    ========================================================================== */
 
 function clamp(v, lo, hi) {
@@ -596,16 +608,18 @@ function evalPhaseFold(odf, startIdx, endIdx, periodFrames, numBins = 48) {
   }
   meanVal /= numBins;
 
-  // Circular 3-tap smoothing [0.25, 0.5, 0.25] for robustness against slight human micro-timing
+  // Circular 3-tap smoothing [0.25, 0.5, 0.25] for robustness against human micro-timing
+  const smooth = new Float32Array(numBins);
   let bestVal = -1;
   let bestBin = 0;
   for (let b = 0; b < numBins; b++) {
     const prev = bins[(b - 1 + numBins) % numBins];
     const curr = bins[b];
     const next = bins[(b + 1) % numBins];
-    const smoothed = 0.25 * prev + 0.5 * curr + 0.25 * next;
-    if (smoothed > bestVal) {
-      bestVal = smoothed;
+    const s = 0.25 * prev + 0.5 * curr + 0.25 * next;
+    smooth[b] = s;
+    if (s > bestVal) {
+      bestVal = s;
       bestBin = b;
     }
   }
@@ -623,7 +637,41 @@ function evalPhaseFold(odf, startIdx, endIdx, periodFrames, numBins = 48) {
   const phaseFrames = (refinedBin / numBins) * periodFrames;
 
   const peakRatio = meanVal > 1e-9 ? bestVal / meanVal : 0;
-  return { score: bestVal, peakRatio, phaseFrames, meanVal };
+  return { score: bestVal, peakRatio, phaseFrames, meanVal, smooth, bestBin };
+}
+
+/**
+ * Measure alternating-beat symmetry at `slowPeriodFrames`:
+ * Compares the phase peak at 0.5 cycles away from the main beat against the main beat.
+ * High ratio (~0.75..1.0) => every half-cycle carries an equally strong structural beat (favor 2x BPM).
+ * Low ratio (~0.0..0.45)  => alternating hits are weak subdivisions like 8th-note hi-hats (favor 1x BPM).
+ */
+function evalAlternatingSymmetry(odf, startIdx, endIdx, slowPeriodFrames, numBins = 48) {
+  const fold = evalPhaseFold(odf, startIdx, endIdx, slowPeriodFrames, numBins);
+  if (!fold || fold.score <= 1e-9) return 0;
+
+  const halfShift = numBins >> 1;
+  let halfPeak = 0;
+  // Allow ±2 bins tolerance around 0.5 cycle for swung grooves
+  for (let d = -2; d <= 2; d++) {
+    const idx = (fold.bestBin + halfShift + d + numBins) % numBins;
+    if (fold.smooth[idx] > halfPeak) halfPeak = fold.smooth[idx];
+  }
+
+  // Estimate trough floor from quarter-cycle regions (away from 0.0 and 0.5)
+  const qShift = numBins >> 2;
+  let troughSum = 0;
+  let troughCnt = 0;
+  for (const center of [fold.bestBin + qShift, fold.bestBin + 3 * qShift]) {
+    for (let d = -2; d <= 2; d++) {
+      troughSum += fold.smooth[(center + d + numBins) % numBins];
+      troughCnt++;
+    }
+  }
+  const floor = troughCnt > 0 ? troughSum / troughCnt : 0;
+  const mainAbove = Math.max(1e-9, fold.score - floor);
+  const halfAbove = Math.max(0, halfPeak - floor);
+  return clamp(halfAbove / mainAbove, 0, 1.2);
 }
 
 /**
@@ -637,7 +685,71 @@ function sampleLinear(arr, idx) {
 }
 
 /**
- * Detect tempo (BPM), half/double time, top 3 candidates, confidence (0–100),
+ * Compute unbiased autocorrelation and forward harmonic comb tempogram for one ODF slice.
+ */
+function computeWindowTempogram(odf, winStart, winEnd, minBpm, maxBpm, bpmStep, fps) {
+  const winLen = winEnd - winStart;
+  const gridCount = Math.floor((maxBpm - minBpm) / bpmStep) + 1;
+  const gridRaw = new Float32Array(gridCount);
+
+  let energy = 0;
+  for (let n = winStart; n < winEnd; n++) {
+    const v = odf[n];
+    energy += v * v;
+  }
+  if (winLen < 32 || energy < 1e-8) {
+    return { ac: new Float32Array(1), gridRaw, clarity: 0, energy: 0 };
+  }
+
+  const maxLagSearch = Math.ceil((60 * fps) / minBpm);
+  const maxLagAc = Math.min(Math.floor(winLen * 0.65), maxLagSearch * 4 + 4);
+  const ac = new Float32Array(maxLagAc + 1);
+  const ac0 = energy / winLen;
+  ac[0] = 1.0;
+
+  for (let lag = 1; lag <= maxLagAc; lag++) {
+    let sum = 0;
+    const limit = winEnd - lag;
+    for (let n = winStart; n < limit; n++) {
+      sum += odf[n] * odf[n + lag];
+    }
+    const count = limit - winStart;
+    ac[lag] = count > 0 ? sum / (count * ac0) : 0;
+  }
+
+  let maxRaw = 0;
+  for (let i = 0; i < gridCount; i++) {
+    const bpm = minBpm + i * bpmStep;
+    const lag = (60 * fps) / bpm;
+
+    const r1 = sampleLinear(ac, lag);
+    const r2 = lag * 2 <= maxLagAc ? sampleLinear(ac, lag * 2) : r1;
+    const r3 = lag * 3 <= maxLagAc ? sampleLinear(ac, lag * 3) : r1;
+    const r4 = lag * 4 <= maxLagAc ? sampleLinear(ac, lag * 4) : r2;
+    const rHalf = lag * 0.5 >= 2 ? sampleLinear(ac, lag * 0.5) : 0;
+
+    // Forward multiples reinforce the true fundamental beat without falsely boosting half-tempo;
+    // capped sub-harmonic term helps subdivided grooves cleanly.
+    const comb =
+      0.54 * r1 +
+      0.24 * r2 +
+      0.10 * r3 +
+      0.06 * r4 +
+      0.06 * Math.min(r1, rHalf);
+
+    gridRaw[i] = comb;
+    if (comb > maxRaw) maxRaw = comb;
+  }
+
+  const sorted = Float32Array.from(gridRaw).sort();
+  const med = sorted[Math.floor(sorted.length * 0.5)] || 0.01;
+  const clarity = clamp((maxRaw / Math.max(med, 0.01) - 1.0) / 4.0, 0.05, 1.5);
+
+  return { ac, gridRaw, clarity, energy: ac0 };
+}
+
+/**
+ * Detect tempo (BPM), half/double time, top 3 candidates, confidence (0–99),
  * and first strong beat offset in seconds (`beatOffsetSec`).
  */
 export function detectBpm(monoSamples, sampleRate, options = {}) {
@@ -663,18 +775,16 @@ export function detectBpm(monoSamples, sampleRate, options = {}) {
     return emptyResult;
   }
 
-  // Choose FFT/hop sizes calibrated to ~11025–12000 Hz (1024 / 256 -> ~43.07 fps)
+  // 1024-pt Hann FFT / 256-pt hop (~43.07 fps at 11,025 Hz)
   const fftSize = fs >= 10000 ? 1024 : 512;
   const hopSize = fftSize >> 2;
   const fps = fs / hopSize;
 
-  // For very long tracks (> 120s), analyze a 120-second active window (centered on the body)
-  // while keeping global startSample so beatOffsetSec maps back to t = 0 of the full file!
+  // For very long tracks (> 120s), analyze a 120s body span while preserving exact global offset
   const maxWindowSamples = Math.floor(fs * 120);
   let analysisStartSample = 0;
   let analysisEndSample = totalSamples;
   if (totalSamples > maxWindowSamples) {
-    // Pick the 120s slice spanning from ~12% into the track
     analysisStartSample = Math.floor((totalSamples - maxWindowSamples) * 0.35);
     analysisStartSample = Math.floor(analysisStartSample / hopSize) * hopSize;
     analysisEndSample = analysisStartSample + maxWindowSamples;
@@ -689,25 +799,48 @@ export function detectBpm(monoSamples, sampleRate, options = {}) {
   const re = new Float32Array(fftSize);
   const im = new Float32Array(fftSize);
   const halfBins = fftSize >> 1;
-
-  // Multi-band bin boundaries: Low (40–220 Hz) for kicks, Mid/High (220–4000 Hz) for snares/hats/transients
   const binHz = fs / fftSize;
-  const lowStart = Math.max(1, Math.floor(40 / binHz));
-  const lowEnd = Math.min(halfBins - 1, Math.max(lowStart + 1, Math.round(220 / binHz)));
-  const highStart = Math.min(halfBins - 1, lowEnd + 1);
-  const highEnd = Math.min(halfBins - 1, Math.max(highStart + 1, Math.round(4000 / binHz)));
 
-  const lowCount = Math.max(1, lowEnd - lowStart + 1);
-  const highCount = Math.max(1, highEnd - highStart + 1);
+  // 4 Perceptual Drum Bands:
+  // Band 1: Kick / 808 punch (40–130 Hz)
+  // Band 2: Snare body / low-mid rhythm (130–400 Hz)
+  // Band 3: Snare crack / clap / consonants (400–2000 Hz)
+  // Band 4: Hi-hats / crisp transients (2000–5200 Hz, capped below Nyquist)
+  const maxUsableHz = Math.min(5200, fs * 0.48);
+  const b1Start = Math.max(2, Math.floor(40 / binHz));
+  const b1End = Math.min(halfBins - 2, Math.max(b1Start, Math.round(130 / binHz)));
+  const b2Start = Math.min(halfBins - 2, b1End + 1);
+  const b2End = Math.min(halfBins - 2, Math.max(b2Start, Math.round(400 / binHz)));
+  const b3Start = Math.min(halfBins - 2, b2End + 1);
+  const b3End = Math.min(halfBins - 2, Math.max(b3Start, Math.round(2000 / binHz)));
+  const b4Start = Math.min(halfBins - 2, b3End + 1);
+  const b4End = Math.min(halfBins - 2, Math.max(b4Start, Math.round(maxUsableHz / binHz)));
 
-  const prevMag = new Float32Array(halfBins);
-  const fluxLow = new Float32Array(numFrames);
-  const fluxHigh = new Float32Array(numFrames);
+  const c1 = Math.max(1, b1End - b1Start + 1);
+  const c2 = Math.max(1, b2End - b2Start + 1);
+  const c3 = Math.max(1, b3End - b3Start + 1);
+  const c4 = Math.max(1, b4End - b4Start + 1);
+
+  const specStart = Math.max(1, b1Start - 1);
+  const specEnd = Math.min(halfBins - 1, b4End + 1);
+
+  let currMag = new Float32Array(halfBins + 1);
+  let prevMag1 = new Float32Array(halfBins + 1);
+  let prevMag2 = new Float32Array(halfBins + 1);
+
+  const flux1 = new Float32Array(numFrames);
+  const flux2 = new Float32Array(numFrames);
+  const flux3 = new Float32Array(numFrames);
+  const flux4 = new Float32Array(numFrames);
 
   const logGamma = 10.0;
-  let energyLowSq = 0;
-  let energyHighSq = 0;
+  let sq1 = 0;
+  let sq2 = 0;
+  let sq3 = 0;
+  let sq4 = 0;
 
+  // SuperFlux (Böck & Widmer 2013): max-filter across [k-1, k, k+1] with 2-frame lookback
+  // suppresses vocal vibrato and synth pitch/amplitude wobble while preserving crisp drum transients!
   for (let f = 0; f < numFrames; f++) {
     const offset = analysisStartSample + f * hopSize;
     for (let i = 0; i < fftSize; i++) {
@@ -716,72 +849,161 @@ export function detectBpm(monoSamples, sampleRate, options = {}) {
     }
     fftRadix2(re, im);
 
-    let sumLow = 0;
-    let sumHigh = 0;
-
-    for (let k = lowStart; k <= lowEnd; k++) {
-      const mag = Math.log1p(logGamma * Math.hypot(re[k], im[k]));
-      if (f > 0) {
-        const diff = mag - prevMag[k];
-        if (diff > 0) sumLow += diff;
-      }
-      prevMag[k] = mag;
+    for (let k = specStart; k <= specEnd; k++) {
+      currMag[k] = Math.log1p(logGamma * Math.hypot(re[k], im[k]));
     }
 
-    for (let k = highStart; k <= highEnd; k++) {
-      const mag = Math.log1p(logGamma * Math.hypot(re[k], im[k]));
-      if (f > 0) {
-        const diff = mag - prevMag[k];
-        if (diff > 0) sumHigh += diff;
+    if (f >= 1) {
+      let s1 = 0;
+      let s2 = 0;
+      let s3 = 0;
+      let s4 = 0;
+      const useTwoFrames = f >= 2;
+
+      for (let k = b1Start; k <= b1End; k++) {
+        let ref = prevMag1[k - 1];
+        if (prevMag1[k] > ref) ref = prevMag1[k];
+        if (prevMag1[k + 1] > ref) ref = prevMag1[k + 1];
+        if (useTwoFrames) {
+          if (prevMag2[k - 1] > ref) ref = prevMag2[k - 1];
+          if (prevMag2[k] > ref) ref = prevMag2[k];
+          if (prevMag2[k + 1] > ref) ref = prevMag2[k + 1];
+        }
+        const d = currMag[k] - ref;
+        if (d > 0) s1 += d;
       }
-      prevMag[k] = mag;
+
+      for (let k = b2Start; k <= b2End; k++) {
+        let ref = prevMag1[k - 1];
+        if (prevMag1[k] > ref) ref = prevMag1[k];
+        if (prevMag1[k + 1] > ref) ref = prevMag1[k + 1];
+        if (useTwoFrames) {
+          if (prevMag2[k - 1] > ref) ref = prevMag2[k - 1];
+          if (prevMag2[k] > ref) ref = prevMag2[k];
+          if (prevMag2[k + 1] > ref) ref = prevMag2[k + 1];
+        }
+        const d = currMag[k] - ref;
+        if (d > 0) s2 += d;
+      }
+
+      for (let k = b3Start; k <= b3End; k++) {
+        let ref = prevMag1[k - 1];
+        if (prevMag1[k] > ref) ref = prevMag1[k];
+        if (prevMag1[k + 1] > ref) ref = prevMag1[k + 1];
+        if (useTwoFrames) {
+          if (prevMag2[k - 1] > ref) ref = prevMag2[k - 1];
+          if (prevMag2[k] > ref) ref = prevMag2[k];
+          if (prevMag2[k + 1] > ref) ref = prevMag2[k + 1];
+        }
+        const d = currMag[k] - ref;
+        if (d > 0) s3 += d;
+      }
+
+      for (let k = b4Start; k <= b4End; k++) {
+        let ref = prevMag1[k - 1];
+        if (prevMag1[k] > ref) ref = prevMag1[k];
+        if (prevMag1[k + 1] > ref) ref = prevMag1[k + 1];
+        if (useTwoFrames) {
+          if (prevMag2[k - 1] > ref) ref = prevMag2[k - 1];
+          if (prevMag2[k] > ref) ref = prevMag2[k];
+          if (prevMag2[k + 1] > ref) ref = prevMag2[k + 1];
+        }
+        const d = currMag[k] - ref;
+        if (d > 0) s4 += d;
+      }
+
+      const v1 = s1 / c1;
+      const v2 = s2 / c2;
+      const v3 = s3 / c3;
+      const v4 = s4 / c4;
+      flux1[f] = v1;
+      flux2[f] = v2;
+      flux3[f] = v3;
+      flux4[f] = v4;
+      sq1 += v1 * v1;
+      sq2 += v2 * v2;
+      sq3 += v3 * v3;
+      sq4 += v4 * v4;
     }
 
-    const vLow = sumLow / lowCount;
-    const vHigh = sumHigh / highCount;
-    fluxLow[f] = vLow;
-    fluxHigh[f] = vHigh;
-    energyLowSq += vLow * vLow;
-    energyHighSq += vHigh * vHigh;
+    // Zero-allocation ring rotation of spectral magnitude history
+    const tmp = prevMag2;
+    prevMag2 = prevMag1;
+    prevMag1 = currMag;
+    currMag = tmp;
   }
 
-  const rmsLow = Math.sqrt(energyLowSq / numFrames);
-  const rmsHigh = Math.sqrt(energyHighSq / numFrames);
+  const rms1 = Math.sqrt(sq1 / numFrames);
+  const rms2 = Math.sqrt(sq2 / numFrames);
+  const rms3 = Math.sqrt(sq3 / numFrames);
+  const rms4 = Math.sqrt(sq4 / numFrames);
 
-  if (rmsLow < 1e-6 && rmsHigh < 1e-6) {
+  const maxBandRms = Math.max(rms1, rms2, rms3, rms4);
+  if (maxBandRms < 1e-6) {
     return emptyResult;
   }
 
-  // Combine normalized multi-band flux (gracefully handles kick-only OR click/hat-only audio)
-  const hasLow = rmsLow > 1e-5;
-  const hasHigh = rmsHigh > 1e-5;
-  const wLow = hasLow && hasHigh ? 0.55 : hasLow ? 1.0 : 0.0;
-  const wHigh = hasLow && hasHigh ? 0.45 : hasHigh ? 1.0 : 0.0;
+  // Auto-reweight across active bands (handles kick-only, click-only, or full drum mixes seamlessly)
+  const rmsGateBand = Math.max(1e-5, maxBandRms * 0.04);
+  const a1 = rms1 > rmsGateBand ? 0.35 : 0;
+  const a2 = rms2 > rmsGateBand ? 0.20 : 0;
+  const a3 = rms3 > rmsGateBand ? 0.25 : 0;
+  const a4 = rms4 > rmsGateBand ? 0.20 : 0;
+  const wSum = a1 + a2 + a3 + a4;
+  if (wSum <= 0) return emptyResult;
+
+  const w1 = a1 / wSum;
+  const w2 = a2 / wSum;
+  const w3 = a3 / wSum;
+  const w4 = a4 / wSum;
+
+  // Low/mid structural drum flux (excludes high hi-hat band) for octave verification
+  const wLowMidSum = a1 + a2 + a3;
+  const hasLowMid = wLowMidSum > 0;
 
   const flux = new Float32Array(numFrames);
+  const fluxLowMid = new Float32Array(numFrames);
+
   for (let f = 0; f < numFrames; f++) {
-    const nl = hasLow ? fluxLow[f] / rmsLow : 0;
-    const nh = hasHigh ? fluxHigh[f] / rmsHigh : 0;
-    flux[f] = wLow * nl + wHigh * nh;
+    const n1 = a1 > 0 ? flux1[f] / rms1 : 0;
+    const n2 = a2 > 0 ? flux2[f] / rms2 : 0;
+    const n3 = a3 > 0 ? flux3[f] / rms3 : 0;
+    const n4 = a4 > 0 ? flux4[f] / rms4 : 0;
+    flux[f] = w1 * n1 + w2 * n2 + w3 * n3 + w4 * n4;
+    if (hasLowMid) {
+      fluxLowMid[f] = (a1 * n1 + a2 * n2 + a3 * n3) / wLowMidSum;
+    }
   }
 
   // Adaptive local-mean thresholding (O(N) via prefix sums)
-  const prefix = new Float64Array(numFrames + 1);
+  const prefixFlux = new Float64Array(numFrames + 1);
+  const prefixLM = new Float64Array(numFrames + 1);
   for (let f = 0; f < numFrames; f++) {
-    prefix[f + 1] = prefix[f] + flux[f];
+    prefixFlux[f + 1] = prefixFlux[f] + flux[f];
+    if (hasLowMid) prefixLM[f + 1] = prefixLM[f] + fluxLowMid[f];
   }
 
   const meanHalfWin = Math.max(4, Math.round(0.35 * fps));
   const odf = new Float32Array(numFrames);
+  const odfLowMid = new Float32Array(numFrames);
+  const odfPrefix = new Float64Array(numFrames + 1);
   let odfEnergy = 0;
+
   for (let f = 0; f < numFrames; f++) {
     const lo = Math.max(0, f - meanHalfWin);
     const hi = Math.min(numFrames - 1, f + meanHalfWin);
-    const localMean = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1);
-    const val = flux[f] - localMean;
+    const invWin = 1 / (hi - lo + 1);
+
+    const val = flux[f] - (prefixFlux[hi + 1] - prefixFlux[lo]) * invWin;
     if (val > 0) {
       odf[f] = val;
       odfEnergy += val * val;
+    }
+    odfPrefix[f + 1] = odfPrefix[f] + odf[f];
+
+    if (hasLowMid) {
+      const lmVal = fluxLowMid[f] - (prefixLM[hi + 1] - prefixLM[lo]) * invWin;
+      if (lmVal > 0) odfLowMid[f] = lmVal;
     }
   }
 
@@ -789,25 +1011,38 @@ export function detectBpm(monoSamples, sampleRate, options = {}) {
     return emptyResult;
   }
 
-  // Unbiased autocorrelation up to 4x the slowest tempo lag (60 BPM)
-  const minLag = Math.max(2, Math.floor((60 * fps) / maxBpm));
-  const maxLagSearch = Math.ceil((60 * fps) / minBpm);
-  const maxLagAc = Math.min(Math.floor(numFrames * 0.65), maxLagSearch * 4 + 4);
-
-  const ac = new Float32Array(maxLagAc + 1);
-  const ac0 = odfEnergy / numFrames;
-  ac[0] = 1.0;
-
-  for (let lag = 1; lag <= maxLagAc; lag++) {
-    let sum = 0;
-    const limit = numFrames - lag;
-    for (let n = 0; n < limit; n++) {
-      sum += odf[n] * odf[n + lag];
-    }
-    ac[lag] = sum / (limit * ac0);
+  // Trim silent / beatless ambient intro & outro so they never dilute autocorrelation
+  const localWin = Math.min(numFrames, Math.max(12, Math.round(1.5 * fps)));
+  let maxLocalSum = 0;
+  for (let f = 0; f <= numFrames - localWin; f++) {
+    const s = odfPrefix[f + localWin] - odfPrefix[f];
+    if (s > maxLocalSum) maxLocalSum = s;
   }
 
-  // Score every tempo from minBpm to maxBpm at 0.5 BPM grid using forward harmonic comb + gentle prior
+  let activeStart = 0;
+  let activeEnd = numFrames;
+  if (maxLocalSum > 1e-6 && numFrames > localWin * 2) {
+    const activityThresh = maxLocalSum * 0.14;
+    const pad = Math.round(0.35 * fps);
+    for (let f = 0; f <= numFrames - localWin; f++) {
+      if (odfPrefix[f + localWin] - odfPrefix[f] >= activityThresh) {
+        activeStart = Math.max(0, f - pad);
+        break;
+      }
+    }
+    for (let f = numFrames - localWin; f >= 0; f--) {
+      if (odfPrefix[f + localWin] - odfPrefix[f] >= activityThresh) {
+        activeEnd = Math.min(numFrames, f + localWin + pad);
+        break;
+      }
+    }
+    if (activeEnd - activeStart < Math.min(numFrames, Math.floor(fps * 5))) {
+      activeStart = 0;
+      activeEnd = numFrames;
+    }
+  }
+
+  // Multi-Window Autocorrelation + Comb-Filter Tempogram Consensus
   const bpmStep = 0.5;
   const gridCount = Math.floor((maxBpm - minBpm) / bpmStep) + 1;
   const gridBpm = new Float32Array(gridCount);
@@ -815,37 +1050,78 @@ export function detectBpm(monoSamples, sampleRate, options = {}) {
   const gridScore = new Float32Array(gridCount);
 
   for (let i = 0; i < gridCount; i++) {
-    const bpm = minBpm + i * bpmStep;
-    gridBpm[i] = bpm;
-    const lag = (60 * fps) / bpm;
-
-    const r1 = sampleLinear(ac, lag);
-    const r2 = lag * 2 <= maxLagAc ? sampleLinear(ac, lag * 2) : r1;
-    const r3 = lag * 3 <= maxLagAc ? sampleLinear(ac, lag * 3) : r1;
-    const r4 = lag * 4 <= maxLagAc ? sampleLinear(ac, lag * 4) : r2;
-    const rHalf = lag * 0.5 >= 2 ? sampleLinear(ac, lag * 0.5) : 0;
-
-    // Forward multiples reinforce true fundamental beat without falsely boosting half-tempo;
-    // capped sub-harmonic bonus helps subdivided grooves without overriding half-time suppression.
-    const comb =
-      0.54 * r1 +
-      0.24 * r2 +
-      0.10 * r3 +
-      0.06 * r4 +
-      0.06 * Math.min(r1, rHalf);
-
-    const logDist = Math.log2(bpm / priorCenter);
-    const prior = Math.exp(-0.5 * (logDist / priorSigma) * (logDist / priorSigma));
-
-    gridRaw[i] = comb;
-    gridScore[i] = comb * prior;
+    gridBpm[i] = minBpm + i * bpmStep;
   }
 
-  // Extract top local maxima (separated by at least 6 BPM)
+  const activeLen = activeEnd - activeStart;
+  const windows = [];
+
+  // Full active body window
+  const fullTempo = computeWindowTempogram(odf, activeStart, activeEnd, minBpm, maxBpm, bpmStep, fps);
+  windows.push({ tempo: fullTempo, baseWeight: activeLen >= Math.floor(fps * 48) ? 0.55 : 1.0 });
+
+  // For longer tracks (>= 48s active), add up to 3 high-energy ~30s sub-windows across early/mid/late track
+  if (activeLen >= Math.floor(fps * 48)) {
+    const subLen = Math.min(Math.floor(30 * fps), Math.floor(activeLen * 0.55));
+    const thirdLen = Math.floor(activeLen / 3);
+    const scanStep = Math.max(1, Math.floor(fps * 1.5));
+
+    for (let seg = 0; seg < 3; seg++) {
+      const segStart = activeStart + seg * thirdLen;
+      const segEnd = seg === 2 ? activeEnd : Math.min(activeEnd, segStart + thirdLen + Math.floor(subLen * 0.4));
+      let bestStart = Math.min(segStart, activeEnd - subLen);
+      let bestSum = -1;
+      const scanMax = Math.min(activeEnd - subLen, Math.max(segStart, segEnd - subLen));
+      for (let s = segStart; s <= scanMax; s += scanStep) {
+        const e = odfPrefix[s + subLen] - odfPrefix[s];
+        if (e > bestSum) {
+          bestSum = e;
+          bestStart = s;
+        }
+      }
+      if (bestSum > 1e-6) {
+        const subTempo = computeWindowTempogram(
+          odf,
+          bestStart,
+          bestStart + subLen,
+          minBpm,
+          maxBpm,
+          bpmStep,
+          fps
+        );
+        windows.push({ tempo: subTempo, baseWeight: 0.45 });
+      }
+    }
+  }
+
+  // Weighted consensus across windows
+  let totalWinWeight = 0;
+  for (const w of windows) {
+    const wt = w.baseWeight * Math.max(0.1, w.tempo.clarity);
+    totalWinWeight += wt;
+    for (let i = 0; i < gridCount; i++) {
+      gridRaw[i] += w.tempo.gridRaw[i] * wt;
+    }
+  }
+  if (totalWinWeight > 0) {
+    const invW = 1 / totalWinWeight;
+    for (let i = 0; i < gridCount; i++) {
+      gridRaw[i] *= invW;
+    }
+  }
+
+  // Apply gentle perceptual tempo prior (centered at 120 BPM)
+  for (let i = 0; i < gridCount; i++) {
+    const bpm = gridBpm[i];
+    const logDist = Math.log2(bpm / priorCenter);
+    const prior = Math.exp(-0.5 * (logDist / priorSigma) * (logDist / priorSigma));
+    gridScore[i] = gridRaw[i] * prior;
+  }
+
+  // Extract local maxima (parabolic interpolation on 0.5-BPM grid)
   const localPeaks = [];
   for (let i = 1; i < gridCount - 1; i++) {
     if (gridScore[i] >= gridScore[i - 1] && gridScore[i] >= gridScore[i + 1] && gridScore[i] > 0) {
-      // Parabolic interpolation on the 0.5-BPM grid
       const ym = gridScore[i - 1];
       const y0 = gridScore[i];
       const yp = gridScore[i + 1];
@@ -864,7 +1140,6 @@ export function detectBpm(monoSamples, sampleRate, options = {}) {
   }
 
   if (localPeaks.length === 0) {
-    // Fallback to global argmax on grid
     let bestIdx = 0;
     for (let i = 1; i < gridCount; i++) {
       if (gridScore[i] > gridScore[bestIdx]) bestIdx = i;
@@ -883,51 +1158,116 @@ export function detectBpm(monoSamples, sampleRate, options = {}) {
   for (const p of localPeaks) {
     if (!distinctPeaks.some((d) => Math.abs(d.bpm - p.bpm) < 5.0)) {
       distinctPeaks.push(p);
-      if (distinctPeaks.length >= 4) break;
+      if (distinctPeaks.length >= 6) break;
     }
   }
 
-  // Fine phase-folded refinement over active ~35s segment (delivers <= 0.1 BPM precision + beatOffsetSec)
-  const foldMaxFrames = Math.min(numFrames, Math.floor(35 * fps));
-  let foldStart = 0;
-  if (numFrames > foldMaxFrames) {
-    // Find the most rhythmically active 35s slice
+  // Select the most rhythmically active ~35s slice inside [activeStart, activeEnd] for phase folding
+  const foldMaxFrames = Math.min(activeLen, Math.floor(35 * fps));
+  let foldStart = activeStart;
+  if (activeLen > foldMaxFrames) {
     let bestWinEnergy = -1;
-    const step = Math.max(1, Math.floor(fps * 2));
-    for (let s = 0; s <= numFrames - foldMaxFrames; s += step) {
-      const e = prefix[s + foldMaxFrames] - prefix[s];
+    const step = Math.max(1, Math.floor(fps * 1.5));
+    for (let s = activeStart; s <= activeEnd - foldMaxFrames; s += step) {
+      const e = odfPrefix[s + foldMaxFrames] - odfPrefix[s];
       if (e > bestWinEnergy) {
         bestWinEnergy = e;
         foldStart = s;
       }
     }
   }
-  const foldEnd = Math.min(numFrames, foldStart + foldMaxFrames);
+  const foldEnd = Math.min(activeEnd, foldStart + foldMaxFrames);
 
+  // Helper to sample consensus comb tempogram at any BPM
+  const sampleGridRaw = (bpm) => {
+    const idx = (bpm - minBpm) / bpmStep;
+    return sampleLinear(gridRaw, idx);
+  };
+  const sampleGridScore = (bpm) => {
+    const idx = (bpm - minBpm) / bpmStep;
+    return sampleLinear(gridScore, idx);
+  };
+
+  // Explicit Octave / Half-Time vs Double-Time Phase-Fold Verification
+  if (distinctPeaks.length > 0) {
+    const primary = distinctPeaks[0];
+    const halfBpm = primary.bpm * 0.5;
+    const doubleBpm = primary.bpm * 2.0;
+
+    // Guard 1: Prevent 8th-note hi-hats from doubling a 60–97 BPM beat into 120–194 BPM
+    if (primary.bpm > 130 && halfBpm >= minBpm) {
+      const slowPeriod = (60 * fps) / halfBpm;
+      const altAll = evalAlternatingSymmetry(odf, foldStart, foldEnd, slowPeriod, 48);
+      const altLow = hasLowMid
+        ? evalAlternatingSymmetry(odfLowMid, foldStart, foldEnd, slowPeriod, 48)
+        : altAll;
+      const combHalf = sampleGridRaw(halfBpm);
+      const isWeakSubdivision =
+        altAll < 0.52 || (hasLowMid && altLow < 0.36 && altAll < 0.68);
+
+      if (isWeakSubdivision && combHalf >= primary.rawComb * 0.58) {
+        const existingIdx = distinctPeaks.findIndex((p) => Math.abs(p.bpm - halfBpm) < 5.0);
+        const promoted =
+          existingIdx >= 0
+            ? distinctPeaks.splice(existingIdx, 1)[0]
+            : { bpm: halfBpm, score: Math.max(sampleGridScore(halfBpm), primary.score * 0.95), rawComb: combHalf };
+        promoted.score = Math.max(promoted.score, primary.score * 1.02);
+        distinctPeaks.unshift(promoted);
+      }
+    }
+    // Guard 2: Prevent true 120–195 BPM beats from collapsing to half-time (60–97 BPM)
+    else if (primary.bpm < 98 && doubleBpm <= maxBpm) {
+      const slowPeriod = (60 * fps) / primary.bpm;
+      const altAll = evalAlternatingSymmetry(odf, foldStart, foldEnd, slowPeriod, 48);
+      const altLow = hasLowMid
+        ? evalAlternatingSymmetry(odfLowMid, foldStart, foldEnd, slowPeriod, 48)
+        : altAll;
+      const combDbl = sampleGridRaw(doubleBpm);
+      const acFast = sampleLinear(fullTempo.ac, (60 * fps) / doubleBpm);
+      const acSlow = sampleLinear(fullTempo.ac, slowPeriod);
+
+      if (
+        altAll >= 0.72 &&
+        (!hasLowMid || altLow >= 0.62) &&
+        combDbl >= primary.rawComb * 0.82 &&
+        acFast >= acSlow * 0.75
+      ) {
+        const existingIdx = distinctPeaks.findIndex((p) => Math.abs(p.bpm - doubleBpm) < 5.0);
+        const promoted =
+          existingIdx >= 0
+            ? distinctPeaks.splice(existingIdx, 1)[0]
+            : { bpm: doubleBpm, score: Math.max(sampleGridScore(doubleBpm), primary.score * 0.95), rawComb: combDbl };
+        promoted.score = Math.max(promoted.score, primary.score * 1.02);
+        distinctPeaks.unshift(promoted);
+      }
+    }
+  }
+
+  // Ultra-Fine Phase-Fold Refinement (0.1 BPM -> 0.02 BPM) + Smart DAW Integer Snap
   const refineCandidate = (cand) => {
     const center = cand.bpm;
     const loBpm = Math.max(minBpm, center - 3.0);
     const hiBpm = Math.min(maxBpm, center + 3.0);
 
-    // Coarse 0.1 BPM sweep around autocorrelation peak
     let bestBpm = center;
-    let bestFoldScore = -1;
+    let bestWeighted = -1;
     let bestFold = null;
 
+    // Coarse 0.1 BPM sweep around autocorrelation peak
     for (let b = loBpm; b <= hiBpm + 1e-6; b += 0.1) {
       const period = (60 * fps) / b;
       const fold = evalPhaseFold(odf, foldStart, foldEnd, period, 48);
-      // Slight tie-breaker towards autocorrelation peak to guard against noise
       const distPenalty = 1 - 0.012 * Math.abs(b - center);
       const val = fold.score * distPenalty;
-      if (val > bestFoldScore) {
-        bestFoldScore = val;
+      if (val > bestWeighted) {
+        bestWeighted = val;
         bestBpm = b;
         bestFold = fold;
       }
     }
 
     // Ultra-fine 0.02 BPM sweep around best 0.1 BPM hit
+    let bestFoldScore = -1;
     const fineLo = Math.max(minBpm, bestBpm - 0.14);
     const fineHi = Math.min(maxBpm, bestBpm + 0.14);
     for (let b = fineLo; b <= fineHi + 1e-6; b += 0.02) {
@@ -937,6 +1277,21 @@ export function detectBpm(monoSamples, sampleRate, options = {}) {
         bestFoldScore = fold.score;
         bestBpm = b;
         bestFold = fold;
+      }
+    }
+
+    // Smart DAW Integer Snap: snaps 123.96 / 124.04 -> exact 124.0 while preserving true 128.5 BPM!
+    const nearestInt = Math.round(bestBpm);
+    if (
+      Math.abs(bestBpm - nearestInt) <= 0.14 &&
+      nearestInt >= minBpm &&
+      nearestInt <= maxBpm
+    ) {
+      const intPeriod = (60 * fps) / nearestInt;
+      const intFold = evalPhaseFold(odf, foldStart, foldEnd, intPeriod, 64);
+      if (intFold.score >= bestFoldScore * 0.98) {
+        bestBpm = nearestInt;
+        bestFold = intFold;
       }
     }
 
@@ -954,19 +1309,18 @@ export function detectBpm(monoSamples, sampleRate, options = {}) {
   const bpm = top.bpm;
   const bpmInt = Math.round(bpm);
 
-  // Compute confidence (0..100%) from autocorrelation periodicity + beat phase sharpness
+  // Calibrated confidence (0..99%) from consensus comb prominence + phase-fold sharpness
   const sortedScores = Float32Array.from(gridRaw).sort();
   const medianComb = sortedScores[Math.floor(sortedScores.length * 0.5)] || 0.01;
   const peakToMedian = top.rawComb / Math.max(medianComb, 0.01);
-  const acQuality = clamp((peakToMedian - 1.3) / 4.2, 0, 1);
-  const phaseSharpness = top.fold ? clamp((top.fold.peakRatio - 1.4) / 3.8, 0, 1) : 0;
-  const rawQuality = clamp(top.rawComb / 0.55, 0, 1);
+  const acQuality = clamp((peakToMedian - 1.3) / 4.0, 0, 1);
+  const phaseSharpness = top.fold ? clamp((top.fold.peakRatio - 1.4) / 3.6, 0, 1) : 0;
+  const rawQuality = clamp(top.rawComb / 0.52, 0, 1);
   const confidence = Math.round(
     clamp((0.40 * acQuality + 0.35 * phaseSharpness + 0.25 * rawQuality) * 100, 5, 99)
   );
 
   // Compute global beatOffsetSec mapped back to t = 0 of the audio file
-  // Spectral flux rises sharpest when the transient enters the leading half of the Hann window (~fftSize * 0.68 after frame start)
   const periodSec = 60 / top.exactBpm;
   const analysisStartSec = analysisStartSample / fs;
   const frameLatencySec = (fftSize * 0.68) / fs;
@@ -994,7 +1348,8 @@ export function detectBpm(monoSamples, sampleRate, options = {}) {
 }
 
 /* ==========================================================================
-   MUSICAL KEY & CHROMAGRAM ENGINE (4096-PT FFT + SHA'ATH KEY PROFILES)
+   MUSICAL KEY & CHROMAGRAM ENGINE
+   (8192-PT FFT HPCP + BASS-ROOT DISAMBIGUATOR + MULTI-PROFILE ENSEMBLE)
    ========================================================================== */
 
 /**
@@ -1028,97 +1383,128 @@ function pearsonCorrelation(x, y) {
 
 /**
  * Detect Musical Key, Chromagram (12 normalized floats), Camelot & Open Key codes,
- * compatible keys, confidence (0–100%), micro-tuning deviation in cents, and top 4 candidates.
+ * compatible keys, confidence (0–99%), micro-tuning deviation in cents, and top 4 candidates.
  */
 export function detectKey(monoSamples, sampleRate, options = {}) {
   const fs = Number(sampleRate) || 11025;
   const totalSamples = monoSamples ? monoSamples.length : 0;
-  const fftSize = 4096;
-  const maxFrames = options.maxFrames ?? 110;
-  const minFreq = options.minFreq ?? 55;
+  const fftSize = 8192; // binHz ≈ 1.35 Hz at 11,025 Hz — resolves 808/bass cleanly down to ~40 Hz!
+  const maxFrames = options.maxFrames ?? 88;
+  const minFreq = options.minFreq ?? 40;
   const maxFreq = options.maxFreq ?? 2600;
+  const bassMaxFreq = 210;
+
+  const emptyKey = () => ({
+    ...getKeyInfo(0, 'major'),
+    confidence: 0,
+    chroma: new Array(12).fill(0),
+    tuningCents: 0,
+    candidates: [],
+  });
 
   if (totalSamples < 512) {
-    const fallback = getKeyInfo(0, 'major');
-    return {
-      ...fallback,
-      confidence: 0,
-      chroma: new Array(12).fill(0),
-      tuningCents: 0,
-      candidates: [],
-    };
+    return emptyKey();
   }
 
-  // Sample evenly across active body:
-  // For full tracks (>= 24s), span 10%–90% to avoid fade-ins/outros;
-  // for shorter loops/samples (< 24s), preserve bar 1 & final resolution across 0%–100%.
+  // Span 4%–96% for full tracks (>= 24s) to preserve structural intro/outro tonic anchors
+  // while skipping dead fade silence; span 0%–100% for shorter loops.
   const durationSec = totalSamples / fs;
-  const spanStart = durationSec >= 24.0 ? Math.floor(totalSamples * 0.10) : 0;
-  const spanEnd = durationSec >= 24.0 ? Math.floor(totalSamples * 0.90) : totalSamples;
+  const spanStart = durationSec >= 24.0 ? Math.floor(totalSamples * 0.04) : 0;
+  const spanEnd = durationSec >= 24.0 ? Math.floor(totalSamples * 0.96) : totalSamples;
   const available = Math.max(1, spanEnd - spanStart);
 
-  const numFrames =
+  // Candidate frame grid (up to 130 positions), filtered to active frames and capped at maxFrames
+  const candCount =
     available <= fftSize
       ? 1
-      : Math.min(maxFrames, Math.max(1, Math.floor((available - fftSize) / (fftSize >> 2)) + 1));
+      : Math.min(130, Math.max(1, Math.floor((available - fftSize) / (fftSize >> 2)) + 1));
 
-  const frameStarts = new Int32Array(numFrames);
-  if (numFrames === 1) {
-    frameStarts[0] = Math.max(0, Math.min(totalSamples - fftSize, spanStart));
+  const candStarts = new Int32Array(candCount);
+  const candRms = new Float32Array(candCount);
+  let maxRms = 0;
+
+  if (candCount === 1) {
+    candStarts[0] = Math.max(0, Math.min(totalSamples - fftSize, spanStart));
   } else {
     const maxStart = Math.max(spanStart, spanEnd - fftSize);
-    const step = (maxStart - spanStart) / (numFrames - 1);
-    for (let i = 0; i < numFrames; i++) {
-      frameStarts[i] = Math.floor(spanStart + i * step);
+    const step = (maxStart - spanStart) / (candCount - 1);
+    for (let i = 0; i < candCount; i++) {
+      candStarts[i] = Math.floor(spanStart + i * step);
     }
   }
 
-  // Precompute frame RMS to ignore silent intros/breaks and weight frames by loudness
-  const frameRms = new Float32Array(numFrames);
-  let maxRms = 0;
-  for (let i = 0; i < numFrames; i++) {
-    const start = frameStarts[i];
+  // Fast strided RMS check across candidate frames
+  for (let i = 0; i < candCount; i++) {
+    const start = candStarts[i];
     const len = Math.min(fftSize, totalSamples - start);
     let sq = 0;
-    for (let j = 0; j < len; j++) {
+    let cnt = 0;
+    for (let j = 0; j < len; j += 4) {
       const s = monoSamples[start + j];
       sq += s * s;
+      cnt++;
     }
-    const r = Math.sqrt(sq / Math.max(1, len));
-    frameRms[i] = r;
+    const r = Math.sqrt(sq / Math.max(1, cnt));
+    candRms[i] = r;
     if (r > maxRms) maxRms = r;
   }
 
   if (maxRms < 1e-5) {
-    const fallback = getKeyInfo(0, 'major');
-    return {
-      ...fallback,
-      confidence: 0,
-      chroma: new Array(12).fill(0),
-      tuningCents: 0,
-      candidates: [],
-    };
+    return emptyKey();
   }
 
+  // Keep only active non-silent frames, subsampled evenly to at most maxFrames
+  const rmsGate = Math.max(1e-5, maxRms * 0.07);
+  const allActive = [];
+  for (let i = 0; i < candCount; i++) {
+    if (candRms[i] >= rmsGate) {
+      allActive.push(i);
+    }
+  }
+  if (allActive.length === 0) {
+    return emptyKey();
+  }
+
+  const activeIndices = [];
+  if (allActive.length <= maxFrames) {
+    for (let i = 0; i < allActive.length; i++) activeIndices.push(allActive[i]);
+  } else {
+    const step = (allActive.length - 1) / (maxFrames - 1);
+    for (let i = 0; i < maxFrames; i++) {
+      activeIndices.push(allActive[Math.round(i * step)]);
+    }
+  }
+
+  const numActive = activeIndices.length;
   const { hann } = getFftPlan(fftSize);
   const re = new Float32Array(fftSize);
   const im = new Float32Array(fftSize);
+  const halfBins = fftSize >> 1;
   const binHz = fs / fftSize;
-  const minBin = Math.max(1, Math.floor(minFreq / binHz));
-  const maxBin = Math.min((fftSize >> 1) - 1, Math.ceil(maxFreq / binHz));
 
-  // Accumulate RMS-weighted power spectrum across all active frames
-  const avgPower = new Float64Array(maxBin + 1);
-  const rmsGate = Math.max(1e-5, maxRms * 0.06);
-  let totalWeight = 0;
+  const minBin = Math.max(2, Math.floor(minFreq / binHz));
+  const maxBin = Math.min(halfBins - 2, Math.ceil(maxFreq / binHz));
+  const floorHalfWin = 7;
+  const specLo = Math.max(1, minBin - floorHalfWin);
+  const specHi = Math.min(halfBins - 1, maxBin + floorHalfWin);
 
-  for (let f = 0; f < numFrames; f++) {
-    const weight = frameRms[f];
-    if (weight < rmsGate) continue;
-    totalWeight += weight;
+  const power = new Float32Array(halfBins);
+  const mag = new Float32Array(halfBins);
+  const magPrefix = new Float64Array(halfBins + 1);
 
-    const start = frameStarts[f];
+  // Pass 1: Extract tonal HPCP peaks per active frame + estimate global A4 micro-tuning
+  const frameRecords = new Array(numActive);
+  let tuneCos = 0;
+  let tuneSin = 0;
+  let tuneMag = 0;
+
+  for (let aIdx = 0; aIdx < numActive; aIdx++) {
+    const cIdx = activeIndices[aIdx];
+    const start = candStarts[cIdx];
     const len = Math.min(fftSize, totalSamples - start);
+    const rmsNorm = candRms[cIdx] / maxRms;
+    const posNorm = numActive > 1 ? aIdx / (numActive - 1) : 0.5;
+
     for (let j = 0; j < len; j++) {
       re[j] = monoSamples[start + j] * hann[j];
       im[j] = 0;
@@ -1130,114 +1516,262 @@ export function detectKey(monoSamples, sampleRate, options = {}) {
 
     fftRadix2(re, im);
 
-    for (let k = minBin; k <= maxBin; k++) {
+    // Compute magnitude, power, and magnitude prefix sum for O(1) flanking noise floor
+    magPrefix[specLo] = 0;
+    let totalFramePower = 0;
+    for (let k = specLo; k <= specHi; k++) {
       const p = re[k] * re[k] + im[k] * im[k];
-      avgPower[k] += p * weight;
+      const m = Math.sqrt(p);
+      power[k] = p;
+      mag[k] = m;
+      magPrefix[k + 1] = magPrefix[k] + m;
+      if (k >= minBin && k <= maxBin) totalFramePower += p;
     }
-  }
 
-  if (totalWeight <= 0) {
-    const fallback = getKeyInfo(0, 'major');
-    return {
-      ...fallback,
-      confidence: 0,
-      chroma: new Array(12).fill(0),
-      tuningCents: 0,
-      candidates: [],
-    };
-  }
+    const peaks = [];
+    let tonalPowerSum = 0;
+    let bassTonalPowerSum = 0;
 
-  // Step 1: Estimate slight global tuning deviation around A4 = 440 Hz using tonal spectral peaks
-  let tuneCos = 0;
-  let tuneSin = 0;
-  let tuneMag = 0;
-  const tuneMinBin = Math.max(minBin + 1, Math.floor(110 / binHz));
-  const tuneMaxBin = Math.min(maxBin - 1, Math.ceil(1800 / binHz));
+    for (let k = minBin; k <= maxBin; k++) {
+      const pk = power[k];
+      if (pk <= 1e-18 || pk <= power[k - 1] || pk < power[k + 1]) continue;
 
-  for (let k = tuneMinBin; k <= tuneMaxBin; k++) {
-    const p = avgPower[k];
-    if (p > avgPower[k - 1] && p >= avgPower[k + 1] && p > 0) {
-      // Parabolic frequency peak interpolation for sub-bin accuracy
-      const lp = Math.log(Math.max(1e-18, avgPower[k - 1]));
-      const cp = Math.log(Math.max(1e-18, p));
-      const rp = Math.log(Math.max(1e-18, avgPower[k + 1]));
+      // Flanking local noise floor across ±7 bins (excluding 3-bin Hann mainlobe [k-1..k+1])
+      const leftLo = Math.max(specLo, k - floorHalfWin);
+      const leftHi = Math.max(leftLo, k - 2);
+      const rightLo = Math.min(specHi, k + 2);
+      const rightHi = Math.min(specHi, k + floorHalfWin);
+      const leftCount = Math.max(0, leftHi - leftLo + 1);
+      const rightCount = Math.max(0, rightHi - rightLo + 1);
+      const flankCount = Math.max(1, leftCount + rightCount);
+
+      const flankMagSum =
+        (leftCount > 0 ? magPrefix[leftHi + 1] - magPrefix[leftLo] : 0) +
+        (rightCount > 0 ? magPrefix[rightHi + 1] - magPrefix[rightLo] : 0);
+      const magFloor = flankMagSum / flankCount;
+      // Squaring flanking mean magnitude gives a noise floor robust to nearby chord tones
+      // (for broadband white noise, (E[R])^2 ≈ 0.785 * E[R^2]; threshold 2.25x ≈ 1.77x mean power)
+      const localFloor = magFloor * magFloor;
+
+      if (pk <= localFloor * 2.25) continue;
+
+      // Parabolic log-power sub-bin interpolation for exact peak frequency
+      const lp = Math.log(Math.max(1e-20, power[k - 1]));
+      const cp = Math.log(Math.max(1e-20, pk));
+      const rp = Math.log(Math.max(1e-20, power[k + 1]));
       const denom = lp - 2 * cp + rp;
       const delta = Math.abs(denom) > 1e-12 ? clamp(0.5 * (lp - rp) / denom, -0.5, 0.5) : 0;
       const freq = (k + delta) * binHz;
-      const midi = 69 + 12 * Math.log2(freq / 440);
-      const dev = midi - Math.round(midi); // [-0.5, +0.5] semitones
-      const w = Math.sqrt(p);
-      tuneCos += w * Math.cos(2 * Math.PI * dev);
-      tuneSin += w * Math.sin(2 * Math.PI * dev);
-      tuneMag += w;
+      if (freq < minFreq || freq > maxFreq) continue;
+
+      const snr = pk / (localFloor + 1e-20);
+      const prominence = clamp((snr - 2.25) / 5.5, 0.08, 1.0);
+      const excessPower = Math.max(0, pk - localFloor);
+      const tonalAmp = Math.sqrt(excessPower) * prominence;
+      tonalPowerSum += excessPower;
+
+      // Accumulate global tuning reference from strong mid-register tonal peaks (110–1800 Hz)
+      if (freq >= 110 && freq <= 1800 && snr > 4.5) {
+        const midiEst = 69 + 12 * Math.log2(freq / 440);
+        const dev = midiEst - Math.round(midiEst);
+        const tw = tonalAmp;
+        tuneCos += tw * Math.cos(2 * Math.PI * dev);
+        tuneSin += tw * Math.sin(2 * Math.PI * dev);
+        tuneMag += tw;
+      }
+
+      // Harmonic Overtone Attenuation for upper frequencies:
+      // Prevents loud 3rd harmonics (Perfect Fifth!) and 5th harmonics (Major Third!)
+      // on sawtooth/square synths & distorted bass from pulling the detected key up a fifth!
+      let harmonicDiscount = 1.0;
+      const peakMag = mag[k];
+      if (freq > 220 && freq / 3 >= minFreq) {
+        const k3 = Math.round((freq / 3) / binHz);
+        if (k3 >= specLo + 1 && k3 <= specHi - 1) {
+          const f3Mag = Math.max(mag[k3 - 1], mag[k3], mag[k3 + 1]);
+          if (f3Mag > peakMag * 0.42) {
+            harmonicDiscount /= 1 + 2.4 * clamp(f3Mag / (peakMag + 1e-9), 0, 1.8);
+          }
+        }
+      }
+      if (freq > 260 && freq / 2 >= minFreq) {
+        const k2 = Math.round((freq / 2) / binHz);
+        if (k2 >= specLo + 1 && k2 <= specHi - 1) {
+          const f2Mag = Math.max(mag[k2 - 1], mag[k2], mag[k2 + 1]);
+          if (f2Mag > peakMag * 0.52) {
+            harmonicDiscount *= 0.72;
+          }
+        }
+      }
+      if (freq > 280 && freq / 5 >= minFreq) {
+        const k5 = Math.round((freq / 5) / binHz);
+        if (k5 >= specLo + 1 && k5 <= specHi - 1) {
+          const f5Mag = Math.max(mag[k5 - 1], mag[k5], mag[k5 + 1]);
+          if (f5Mag > peakMag * 0.65) {
+            harmonicDiscount *= 0.48;
+          }
+        }
+      }
+
+      const isBass = freq <= bassMaxFreq;
+      if (isBass) bassTonalPowerSum += excessPower;
+
+      peaks.push({
+        freq,
+        amp: tonalAmp * harmonicDiscount,
+        bassAmp: isBass ? tonalAmp : 0,
+        isBass,
+      });
     }
+
+    const tonalClarity = totalFramePower > 1e-18 ? clamp(tonalPowerSum / totalFramePower, 0, 1) : 0;
+    frameRecords[aIdx] = {
+      peaks,
+      rmsNorm,
+      posNorm,
+      tonalClarity,
+      tonalPowerSum,
+      bassTonalPowerSum,
+    };
   }
 
+  // Global micro-tuning offset around A4 = 440 Hz (supports 432 Hz / tape varispeed masters)
   const tuneCoherence = tuneMag > 0 ? Math.hypot(tuneCos, tuneSin) / tuneMag : 0;
   let tuningOffsetSemi = 0;
-  if (tuneCoherence > 0.35) {
+  if (tuneCoherence > 0.30) {
     tuningOffsetSemi = clamp(Math.atan2(tuneSin, tuneCos) / (2 * Math.PI), -0.42, 0.42);
   }
   const tuningCents = Math.round(tuningOffsetSemi * 100);
 
-  // Step 2: Map FFT bins (55–2600 Hz) onto 12 chromatic pitch classes with Gaussian bin weighting
-  // Compensate octave bin density & gently taper sub-65Hz rumble / >1800Hz overtone glare
-  const chromaPower = new Float64Array(12);
-  const gaussSigma = 0.25; // semitones
-  const inv2SigmaSq = 1 / (2 * gaussSigma * gaussSigma);
+  // Pass 2: Build Per-Frame L2-Normalized HPCP Chroma + Dedicated Bass/808 Root Chromagram (40–210 Hz)
+  const globalChroma = new Float64Array(12);
+  const globalBassChroma = new Float64Array(12);
+  const frameChroma = new Float64Array(12);
+  const frameBass = new Float64Array(12);
 
-  for (let k = minBin; k <= maxBin; k++) {
-    const freq = k * binHz;
-    const p = avgPower[k];
-    if (p <= 0) continue;
+  let totalTonalPowerAll = 0;
+  let totalBassPowerAll = 0;
+  let activeChromaFrames = 0;
+  let activeBassFrames = 0;
 
-    // Subtle tonal/band shaping: slight bass warmth for harmonic root clarity, mild rolloff above 1600 Hz
-    let bandWeight = 1.0;
-    if (freq < 75) {
-      bandWeight = 0.6 + 0.4 * ((freq - 55) / 20);
-    } else if (freq > 1600) {
-      bandWeight = Math.max(0.35, 1.0 - ((freq - 1600) / 1400) * 0.65);
+  for (let aIdx = 0; aIdx < numActive; aIdx++) {
+    const rec = frameRecords[aIdx];
+    if (!rec || rec.peaks.length === 0) continue;
+
+    frameChroma.fill(0);
+    frameBass.fill(0);
+    totalTonalPowerAll += rec.tonalPowerSum;
+    totalBassPowerAll += rec.bassTonalPowerSum;
+
+    for (let pIdx = 0; pIdx < rec.peaks.length; pIdx++) {
+      const pk = rec.peaks[pIdx];
+      const freq = pk.freq;
+
+      // Subtle perceptual band curve: warm low-mid fundamental emphasis, gentle top rolloff
+      let bandWeight = 1.0;
+      if (freq < 60) {
+        bandWeight = 0.72 + 0.28 * ((freq - 40) / 20);
+      } else if (freq > 1500) {
+        bandWeight = Math.max(0.32, 1.0 - ((freq - 1500) / 1400) * 0.68);
+      }
+
+      const midi = 69 + 12 * Math.log2(freq / 440) - tuningOffsetSemi;
+      const nearest = Math.round(midi);
+      const dist = midi - nearest; // [-0.5, +0.5] semitones
+      const pc0 = ((nearest % 12) + 12) % 12;
+
+      // Crisp cos^2 HPCP pitch-class proximity window (zeroes cleanly at ±0.5 semitones)
+      const w0 = Math.cos(Math.PI * dist);
+      const w0Sq = w0 * w0;
+
+      const cVal = pk.amp * bandWeight;
+      frameChroma[pc0] += cVal * w0Sq;
+
+      if (Math.abs(dist) > 0.22) {
+        const adjDir = dist >= 0 ? 1 : -1;
+        const pc1 = (pc0 + adjDir + 12) % 12;
+        const adjDist = 1 - Math.abs(dist);
+        const w1 = Math.cos(Math.PI * clamp(adjDist, 0, 0.5));
+        frameChroma[pc1] += cVal * (w1 * w1) * 0.5;
+      }
+
+      // Dedicated Bass / 808 Root accumulation (40–210 Hz):
+      // Prefer lower fundamentals slightly so 808/bass root stands above its own 2nd harmonic
+      if (pk.isBass && pk.bassAmp > 0) {
+        const lowBias = 1.0 + 0.55 * clamp((160 - freq) / 110, 0, 1);
+        frameBass[pc0] += pk.bassAmp * lowBias * w0Sq;
+      }
     }
 
-    // Divide by proportional bin-density (bins per semitone ~ freq) gently via 1 / (freq/220)^0.35
-    // so upper octaves with many FFT bins don't amplify broadband hiss over fundamentals
-    const octaveBalance = 1 / Math.pow(Math.max(0.5, freq / 220), 0.35);
-    const weightedPower = p * bandWeight * octaveBalance;
+    // Per-frame L2 normalization so a single loud chorus stab cannot drown out the chord progression
+    let l2Sq = 0;
+    for (let i = 0; i < 12; i++) l2Sq += frameChroma[i] * frameChroma[i];
+    if (l2Sq > 1e-18) {
+      const invL2 = 1 / Math.sqrt(l2Sq);
+      // Weight by tonal clarity (strips drum-only frames) & mild RMS curve
+      const frameWeight = (0.25 + 0.75 * rec.tonalClarity) * Math.pow(rec.rmsNorm, 0.35);
+      for (let i = 0; i < 12; i++) {
+        globalChroma[i] += frameChroma[i] * invL2 * frameWeight;
+      }
+      activeChromaFrames++;
+    }
 
-    const midi = 69 + 12 * Math.log2(freq / 440) - tuningOffsetSemi;
-    const nearest = Math.round(midi);
-    const dist = midi - nearest;
-    const pc0 = ((nearest % 12) + 12) % 12;
-
-    const w0 = Math.exp(-dist * dist * inv2SigmaSq);
-    chromaPower[pc0] += weightedPower * w0;
-
-    // Smooth spillover into adjacent semitone for detuned / vibrato instruments
-    const adjDir = dist >= 0 ? 1 : -1;
-    const adjDist = 1 - Math.abs(dist);
-    if (adjDist < 0.85) {
-      const pc1 = (pc0 + adjDir + 12) % 12;
-      const w1 = Math.exp(-adjDist * adjDist * inv2SigmaSq);
-      chromaPower[pc1] += weightedPower * w1;
+    // Per-frame L2 normalization for Bass/Root chromagram + structural anchor bonus (first/last 15%)
+    let bassL2Sq = 0;
+    for (let i = 0; i < 12; i++) bassL2Sq += frameBass[i] * frameBass[i];
+    if (bassL2Sq > 1e-18) {
+      const invBassL2 = 1 / Math.sqrt(bassL2Sq);
+      const anchorBonus = rec.posNorm <= 0.15 || rec.posNorm >= 0.85 ? 1.40 : 1.0;
+      const bassFrameWeight =
+        anchorBonus * (0.30 + 0.70 * rec.tonalClarity) * Math.pow(rec.rmsNorm, 0.35);
+      for (let i = 0; i < 12; i++) {
+        globalBassChroma[i] += frameBass[i] * invBassL2 * bassFrameWeight;
+      }
+      activeBassFrames++;
     }
   }
 
-  // Convert accumulated pitch-class power to perceptual linear salience (sqrt) and normalize to [0..1]
-  const chromaRaw = new Float64Array(12);
+  if (activeChromaFrames === 0) {
+    return emptyKey();
+  }
+
+  // Normalize global HPCP chroma to [0..1]
   let maxChroma = 0;
   for (let i = 0; i < 12; i++) {
-    chromaRaw[i] = Math.sqrt(Math.max(0, chromaPower[i]));
-    if (chromaRaw[i] > maxChroma) maxChroma = chromaRaw[i];
+    if (globalChroma[i] > maxChroma) maxChroma = globalChroma[i];
   }
-
   const chroma = new Array(12).fill(0);
   if (maxChroma > 1e-12) {
     for (let i = 0; i < 12; i++) {
-      chroma[i] = Math.round((chromaRaw[i] / maxChroma) * 10000) / 10000;
+      chroma[i] = Math.round((globalChroma[i] / maxChroma) * 10000) / 10000;
     }
   }
 
-  // Step 3: Correlate against all 24 Sha'ath major & minor key profiles via Pearson correlation
+  // Normalize Bass/Root chromagram to [0..1] and calibrate bass clarity scale
+  let maxBass = 0;
+  let sumBass = 0;
+  for (let i = 0; i < 12; i++) {
+    if (globalBassChroma[i] > maxBass) maxBass = globalBassChroma[i];
+    sumBass += globalBassChroma[i];
+  }
+  const bassChroma = new Float64Array(12);
+  let bassScale = 0;
+  if (maxBass > 1e-12 && activeBassFrames >= Math.max(1, Math.floor(activeChromaFrames * 0.25))) {
+    for (let i = 0; i < 12; i++) {
+      bassChroma[i] = globalBassChroma[i] / maxBass;
+    }
+    const bassEnergyRatio = totalTonalPowerAll > 1e-18 ? totalBassPowerAll / totalTonalPowerAll : 0;
+    const meanBass = sumBass / 12;
+    const bassConcentration = maxBass / Math.max(1e-12, meanBass);
+    // Bassless bright tracks have low energyRatio -> bassScale ~ 0;
+    // Real bass/808 tracks have clear peaked bass roots -> bassScale ~ 0.7..1.0
+    const presenceFactor = clamp(bassEnergyRatio / 0.08, 0, 1);
+    const peakFactor = clamp((bassConcentration - 1.4) / 2.2, 0, 1);
+    bassScale = presenceFactor * peakFactor;
+  }
+
+  // Pass 3: Multi-Profile Ensemble Scoring (Sha'ath 50% + Temperley 30% + Krumhansl-Kessler 20%)
+  // + Calibrated Bass-Root Tonic Disambiguator (solves Relative Major vs Relative Minor!)
   const hypotheses = [];
   const rotated = new Float64Array(12);
 
@@ -1246,27 +1780,48 @@ export function detectKey(monoSamples, sampleRate, options = {}) {
       rotated[i] = chroma[(tonic + i) % 12];
     }
 
-    const rMaj = pearsonCorrelation(rotated, PROFILE_MAJOR);
-    const rMin = pearsonCorrelation(rotated, PROFILE_MINOR);
+    const rMaj =
+      0.50 * pearsonCorrelation(rotated, PROFILE_SHAATH_MAJOR) +
+      0.30 * pearsonCorrelation(rotated, PROFILE_TEMPERLEY_MAJOR) +
+      0.20 * pearsonCorrelation(rotated, PROFILE_KK_MAJOR);
 
-    hypotheses.push({ pitchClass: tonic, mode: 'major', correlation: rMaj });
-    hypotheses.push({ pitchClass: tonic, mode: 'minor', correlation: rMin });
+    const rMin =
+      0.50 * pearsonCorrelation(rotated, PROFILE_SHAATH_MINOR) +
+      0.30 * pearsonCorrelation(rotated, PROFILE_TEMPERLEY_MINOR) +
+      0.20 * pearsonCorrelation(rotated, PROFILE_KK_MINOR);
+
+    const bassTieBreaker =
+      bassScale * (0.14 * bassChroma[tonic] + 0.04 * bassChroma[(tonic + 7) % 12]);
+
+    hypotheses.push({
+      pitchClass: tonic,
+      mode: 'major',
+      ensembleR: rMaj,
+      correlation: rMaj + bassTieBreaker,
+    });
+    hypotheses.push({
+      pitchClass: tonic,
+      mode: 'minor',
+      ensembleR: rMin,
+      correlation: rMin + bassTieBreaker,
+    });
   }
 
   hypotheses.sort((a, b) => b.correlation - a.correlation);
 
   const best = hypotheses[0];
   const runnerUp = hypotheses[1];
-  const r1 = best.correlation;
-  const r2 = runnerUp ? runnerUp.correlation : 0;
-  const margin = Math.max(0, r1 - r2);
+  const r1 = best.ensembleR;
+  const s1 = best.correlation;
+  const s2 = runnerUp ? runnerUp.correlation : 0;
+  const margin = Math.max(0, s1 - s2);
 
-  // Calibrated confidence (0..99%): balances absolute correlation strength & separation from #2
-  const strengthScore = clamp((r1 - 0.15) / 0.72, 0, 1);
-  const sepScore = clamp(margin / 0.22, 0, 1);
-  const confidence = r1 <= 0
+  // Calibrated confidence (0..99%): balances absolute ensemble fit AND separation from runner-up
+  const strengthScore = clamp((r1 - 0.14) / 0.72, 0, 1);
+  const sepScore = clamp(margin / 0.18, 0, 1);
+  const confidence = s1 <= 0
     ? 0
-    : Math.round(clamp((0.68 * strengthScore + 0.32 * sepScore) * 100, 10, 99));
+    : Math.round(clamp((0.62 * strengthScore + 0.38 * sepScore) * 100, 10, 99));
 
   const bestInfo = getKeyInfo(best.pitchClass, best.mode);
 
@@ -1285,7 +1840,7 @@ export function detectKey(monoSamples, sampleRate, options = {}) {
       camelot: info.camelot,
       openKey: info.openKey,
       correlation: Math.round(h.correlation * 1000) / 1000,
-      scorePct: Math.round(clamp(((h.correlation + 1) / 2) * 100, 0, 100)),
+      scorePct: Math.round(clamp(((clamp(h.correlation, -1, 1) + 1) / 2) * 100, 0, 100)),
     };
   });
 
