@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="BPM & Key Finder by Saint Gordon Collective — 100% client-side studio tempo, musical key, chromagram, beat-locked metronome, and interactive Camelot wheel analyzer."
+    />
+    <title>BPM &amp; Key Finder — Saint Gordon Collective</title>
+    <link rel="icon" href="assets/icons/mark.svg" type="image/svg+xml" />
+    <link
+      rel="preload"
+      href="assets/fonts/OPTIEngraversOldEnglish.woff"
+      as="font"
+      type="font/woff"
+      crossorigin
+    />
+    <link rel="stylesheet" href="app.css?v=20261124-1" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to harmonic deck</a>
+
+    <!-- Saint Gordon Collective Header -->
+    <header class="site-header">
+      <div class="header-inner">
+        <a
+          class="brand"
+          href="#main"
+          aria-label="BPM and Key Finder by Saint Gordon Collective"
+        >
+          <img
+            src="assets/icons/mark.svg"
+            alt=""
+            width="36"
+            height="36"
+            class="brand-mark"
+          />
+          <span class="brand-text">
+            <span class="brand-name">Saint Gordon</span>
+            <span class="brand-sub">BPM &amp; KEY FINDER · HARMONIC DECK</span>
+          </span>
+        </a>
+
+        <nav class="header-nav" aria-label="Tool status and collective links">
+          <div class="header-actions">
+            <span class="privacy-badge">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span>100% In-Browser</span>
+            </span>
+            <button
+              type="button"
+              id="btn-header-clear"
+              class="sg-btn sg-btn-outline sg-btn-sm hidden"
+            >
+              Clear Session
+            </button>
+            <a
+              class="header-ext-link micro"
+              href="https://saintgordon.vercel.app"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Collective ↗
+            </a>
+          </div>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main" class="app-main">
+      <!-- Editorial Tool Masthead -->
+      <div class="hero-meta micro">
+        <span>TOOL / 005 · HARMONIC &amp; TEMPO ANALYZER</span>
+        <span>SAINT GORDON / BPM &amp; KEY FINDER</span>
+      </div>
+
+      <section class="hero-band" aria-labelledby="page-heading">
+        <div class="hero-title-col">
+          <h1 id="page-heading" class="page-wordmark">
+            BPM &amp; Key Finder
+            <span>HARMONIC &amp; TEMPO DECK</span>
+          </h1>
+        </div>
+        <div class="hero-copy-col">
+          <p class="hero-lead">
+            Exact tempo, musical key, and Camelot harmony — verified by ear, never guessed.
+          </p>
+          <p class="hero-sub">
+            Drop a single master or an entire beat pack for multi-band onset BPM analysis,
+            chromagram key detection, beat-locked metronome verification, triad chord auditioning,
+            and interactive Camelot mixing transitions — 100% inside your browser.
+          </p>
+        </div>
+      </section>
+
+      <!-- ================= 001 / SINGLE & BATCH DROPZONE ================= -->
+      <section
+        class="sg-card dropzone-card"
+        id="upload-dropzone"
+        aria-label="Upload audio tracks for BPM and key analysis"
+      >
+        <input
+          type="file"
+          id="file-upload-input"
+          multiple
+          accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg,.opus,.aif,.aiff,.webm"
+          class="sr-only"
+        />
+        <input
+          type="file"
+          id="folder-upload-input"
+          webkitdirectory
+          directory
+          multiple
+          class="sr-only"
+        />
+
+        <div class="dropzone-body" id="dropzone-click-target">
+          <span class="micro dropzone-kicker">001 / SOURCE AUDIO — SINGLE OR BATCH</span>
+          <h2 class="dropzone-heading">Drag &amp; Drop Tracks or Beat Packs Here</h2>
+          <p class="dropzone-formats">
+            Supports WAV, MP3, FLAC, M4A, AAC, OGG (plus AIFF on Safari). Analyze one song or drop
+            an entire folder for instant batch BPM, Key &amp; Camelot export.
+          </p>
+
+          <div class="dropzone-buttons">
+            <button type="button" id="btn-select-files" class="paper-button">
+              <span>Select Audio Files</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+            <button type="button" id="btn-select-folder" class="sg-btn sg-btn-outline">
+              Select Folder
+            </button>
+          </div>
+        </div>
+
+        <div class="dropzone-toolbar">
+          <div class="dropzone-toolbar-left">
+            <button type="button" id="btn-load-demo" class="sg-btn sg-btn-ghost sg-btn-sm">
+              ♪ Load 124 BPM Demo Beat (F#m · 11A)
+            </button>
+          </div>
+          <span class="micro pure-local-tag">
+            ✳ ZERO SERVER UPLOADS · PURE WEB AUDIO DSP
+          </span>
+        </div>
+
+        <!-- Batch Decode & Analysis Progress -->
+        <div id="analysis-progress-container" class="progress-wrap hidden" aria-live="polite">
+          <div class="progress-meta micro">
+            <span id="analysis-progress-text">Analyzing audio...</span>
+            <span id="analysis-progress-pct">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="analysis-progress-bar" class="progress-fill"></div>
+          </div>
+        </div>
+
+        <!-- Decode / Unsupported File Notices -->
+        <div id="analysis-errors-banner" class="notice-banner hidden" role="alert">
+          <div class="notice-head">
+            <strong id="analysis-errors-title">Some files could not be analyzed</strong>
+            <button type="button" id="btn-dismiss-errors" class="sg-btn-link micro">
+              Dismiss ×
+            </button>
+          </div>
+          <ul id="analysis-errors-list" class="notice-list"></ul>
+        </div>
+      </section>
+
+      <!-- ================= 002 / STUDIO INSPECTION DECK (DARK CONSOLE) ================= -->
+      <section class="deck-section" aria-labelledby="deck-heading">
+        <div class="section-bar deck-section-bar">
+          <div>
+            <span class="micro">002 / STUDIO INSPECTION DECK</span>
+            <h2 id="deck-heading" class="section-title">Harmonic &amp; Tempo Console</h2>
+          </div>
+          <div class="section-bar-actions" id="deck-nav-actions">
+            <button
+              type="button"
+              id="btn-prev-track"
+              class="sg-btn sg-btn-outline sg-btn-sm hidden"
+              title="Previous track in queue"
+            >
+              ← Prev
+            </button>
+            <button
+              type="button"
+              id="btn-next-track"
+              class="sg-btn sg-btn-outline sg-btn-sm hidden"
+              title="Next track in queue"
+            >
+              Next →
+            </button>
+            <button
+              type="button"
+              id="btn-copy-tag-top"
+              class="sg-btn sg-btn-ink sg-btn-sm"
+              disabled
+            >
+              Copy Tag
+            </button>
+          </div>
+        </div>
+
+        <div class="studio-deck" id="studio-deck" data-state="standby">
+          <!-- Hardware Console Top Bar -->
+          <div class="deck-head">
+            <div class="deck-id">
+              <span class="deck-led" id="deck-led" aria-hidden="true"></span>
+              <span class="deck-label">HARMONIC DECK // TOOL 005</span>
+              <span class="deck-sub-id" id="deck-track-name">STANDBY — DROP AUDIO OR USE TAP TEMPO &amp; WHEEL</span>
+            </div>
+            <div class="deck-head-right">
+              <span class="deck-specs micro hidden" id="deck-track-specs">44.1 kHz · STEREO</span>
+              <span class="deck-state" id="deck-state-pill">STANDBY</span>
+            </div>
+          </div>
+
+          <!-- Dual Hero Readouts: TEMPO (Left) & KEY / CAMELOT (Right) -->
+          <div class="readout-grid">
+            <!-- TEMPO MODULE -->
+            <article class="deck-module bpm-module" aria-label="Detected tempo readout and controls">
+              <div class="module-head">
+                <span class="micro module-kicker">TEMPO / BPM</span>
+                <div class="module-badges">
+                  <span class="deck-badge hidden" id="bpm-override-badge">HALF-TIME</span>
+                  <span class="deck-badge" id="bpm-confidence-badge">CONF —</span>
+                </div>
+              </div>
+
+              <div class="hero-readout-row">
+                <div class="hero-number" id="bpm-hero-value">—.—</div>
+                <div class="hero-unit-stack">
+                  <span class="hero-unit micro">BPM</span>
+                  <span class="hero-sub-meta micro" id="bpm-octaves-meta">HALF — · DOUBLE —</span>
+                </div>
+              </div>
+
+              <div class="module-controls">
+                <button
+                  type="button"
+                  id="btn-half-bpm"
+                  class="deck-pill-btn"
+                  disabled
+                  title="Switch to half-time (÷2)"
+                >
+                  ÷2 Half
+                </button>
+                <button
+                  type="button"
+                  id="btn-double-bpm"
+                  class="deck-pill-btn"
+                  disabled
+                  title="Switch to double-time (×2)"
+                >
+                  ×2 Double
+                </button>
+                <button
+                  type="button"
+                  id="btn-reset-bpm"
+                  class="deck-pill-btn hidden"
+                  title="Restore detected BPM"
+                >
+                  ↺ Detected
+                </button>
+                <button
+                  type="button"
+                  id="btn-tap-tempo"
+                  class="deck-pill-btn deck-pill-accent"
+                  title="Tap repeatedly on the beat to verify tempo (T)"
+                >
+                  Tap Tempo <kbd>T</kbd>
+                </button>
+              </div>
+
+              <!-- Live Tap Tempo Readout -->
+              <div class="tap-feedback micro hidden" id="tap-feedback-bar" aria-live="polite">
+                <span id="tap-feedback-text">TAP BPM: — (0 taps)</span>
+                <button type="button" id="btn-clear-tap" class="deck-inline-link micro">
+                  Clear
+                </button>
+              </div>
+
+              <!-- Top Tempo Candidates -->
+              <div class="candidates-row">
+                <span class="micro candidates-label">TEMPO CANDIDATES</span>
+                <div class="candidates-list" id="bpm-candidates-list">
+                  <span class="micro muted-placeholder">Drop a track to inspect tempo peaks</span>
+                </div>
+              </div>
+            </article>
+
+            <!-- MUSICAL KEY & CAMELOT MODULE -->
+            <article class="deck-module key-module" aria-label="Detected musical key and Camelot readout">
+              <div class="module-head">
+                <span class="micro module-kicker">MUSICAL KEY &amp; CAMELOT</span>
+                <div class="module-badges">
+                  <span class="deck-badge hidden" id="key-tuning-badge">A4 440Hz</span>
+                  <span class="deck-badge" id="key-confidence-badge">CONF —</span>
+                </div>
+              </div>
+
+              <div class="key-hero-row">
+                <div class="key-name-block">
+                  <div class="hero-key-name" id="key-hero-value">—</div>
+                  <div class="hero-sub-meta micro" id="key-relative-meta">
+                    RELATIVE: — · ENHARMONIC: —
+                  </div>
+                </div>
+
+                <div class="camelot-stamp-group">
+                  <div class="camelot-stamp" id="key-camelot-badge" title="Camelot Harmonic Code">
+                    —
+                  </div>
+                  <div class="openkey-stamp micro" id="key-openkey-badge" title="Open Key Notation">
+                    OPEN —
+                  </div>
+                </div>
+              </div>
+
+              <div class="module-controls">
+                <button
+                  type="button"
+                  id="btn-enharmonic-toggle"
+                  class="deck-pill-btn"
+                  title="Cycle sharp / flat accidental spelling"
+                >
+                  # / ♭: <span id="enharmonic-mode-label">AUTO</span>
+                </button>
+                <button
+                  type="button"
+                  id="btn-play-chord"
+                  class="deck-pill-btn deck-pill-primary"
+                  title="Audition detected key triad chord (C)"
+                >
+                  ♪ Play Key Chord <kbd>C</kbd>
+                </button>
+                <button
+                  type="button"
+                  id="btn-tonic-drone"
+                  class="deck-pill-btn"
+                  aria-pressed="false"
+                  title="Toggle sustained tonic & fifth reference drone (D)"
+                >
+                  ◈ Tonic Drone <kbd>D</kbd>
+                </button>
+              </div>
+
+              <!-- Top 4 Key Candidates (Click any candidate to audition chord over track!) -->
+              <div class="candidates-row">
+                <span class="micro candidates-label">KEY CANDIDATES — CLICK TO AUDITION CHORD</span>
+                <div class="candidates-list" id="key-candidates-list">
+                  <span class="micro muted-placeholder">Drop a track to compare top 4 key hypotheses</span>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <!-- Audition Waveform Scrubber & Beat-Locked Metronome Deck -->
+          <div class="audition-panel" id="audition-panel">
+            <div class="deck-timeline-row">
+              <span id="timeline-current-time" class="time-readout micro">00:00.0</span>
+              <div
+                class="timeline-wave-track"
+                id="waveform-scrubber"
+                role="slider"
+                tabindex="0"
+                aria-label="Track playback position"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="0"
+              >
+                <canvas id="waveform-canvas" width="900" height="72"></canvas>
+                <div id="timeline-progress-bar" class="timeline-progress-mask"></div>
+                <div id="timeline-playhead" class="timeline-head"></div>
+                <span class="wave-empty-hint micro" id="wave-empty-hint">
+                  LOAD AN AUDIO FILE TO AUDITION WAVEFORM &amp; BEAT GRID
+                </span>
+              </div>
+              <span id="timeline-total-time" class="time-readout micro">00:00.0</span>
+            </div>
+
+            <div class="deck-transport-bar">
+              <div class="transport-group">
+                <button
+                  type="button"
+                  id="btn-play-pause"
+                  class="deck-pill-btn deck-pill-primary"
+                  disabled
+                >
+                  <span id="play-btn-glyph" aria-hidden="true">▶</span>
+                  <span id="play-btn-text">Play Track</span>
+                  <kbd>Space</kbd>
+                </button>
+                <button
+                  type="button"
+                  id="btn-restart"
+                  class="deck-pill-btn"
+                  disabled
+                  title="Restart from 00:00.0 (R)"
+                >
+                  ↺ <kbd>R</kbd>
+                </button>
+              </div>
+
+              <!-- Metronome Click Overlay + Beat Grid Nudge -->
+              <div class="transport-group metro-group">
+                <button
+                  type="button"
+                  id="btn-metronome"
+                  class="deck-pill-btn"
+                  aria-pressed="false"
+                  title="Toggle beat-locked Web Audio metronome click (M)"
+                >
+                  <span class="metro-dots" id="metro-dots" aria-hidden="true">
+                    <span class="metro-dot"></span>
+                    <span class="metro-dot"></span>
+                    <span class="metro-dot"></span>
+                    <span class="metro-dot"></span>
+                  </span>
+                  <span>Metronome</span>
+                  <kbd>M</kbd>
+                </button>
+
+                <div class="nudge-group" role="group" aria-label="Beat grid alignment nudge">
+                  <button
+                    type="button"
+                    id="btn-nudge-minus"
+                    class="deck-seg-btn"
+                    title="Shift metronome grid -20 ms"
+                  >
+                    −20ms
+                  </button>
+                  <button
+                    type="button"
+                    id="btn-snap-beat"
+                    class="deck-seg-btn"
+                    disabled
+                    title="Snap Beat 1 to current playhead position (B)"
+                  >
+                    Beat 1 <kbd>B</kbd>
+                  </button>
+                  <button
+                    type="button"
+                    id="btn-nudge-plus"
+                    class="deck-seg-btn"
+                    title="Shift metronome grid +20 ms"
+                  >
+                    +20ms
+                  </button>
+                </div>
+
+                <span class="micro offset-readout" id="beat-offset-readout" title="Estimated first strong beat phase">
+                  GRID 0.000s
+                </span>
+              </div>
+
+              <div class="transport-group">
+                <label class="deck-volume" for="master-volume-slider">
+                  <span class="micro">VOL</span>
+                  <input
+                    type="range"
+                    id="master-volume-slider"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value="0.85"
+                    aria-label="Master volume"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Studio Delay Timings & Copy Tag Strip -->
+          <div class="timing-strip" aria-label="Beat-synced delay timings and quick copy tag">
+            <div class="timing-cells">
+              <div class="timing-cell">
+                <span class="micro timing-label">1/4 NOTE</span>
+                <strong class="timing-val" id="timing-quarter">500.0 ms</strong>
+              </div>
+              <div class="timing-cell">
+                <span class="micro timing-label">1/8 NOTE</span>
+                <strong class="timing-val" id="timing-eighth">250.0 ms</strong>
+              </div>
+              <div class="timing-cell">
+                <span class="micro timing-label">1/8 DOTTED</span>
+                <strong class="timing-val" id="timing-dotted">375.0 ms</strong>
+              </div>
+              <div class="timing-cell">
+                <span class="micro timing-label">1/16 NOTE</span>
+                <strong class="timing-val" id="timing-sixteenth">125.0 ms</strong>
+              </div>
+              <div class="timing-cell">
+                <span class="micro timing-label">1 BAR (4/4)</span>
+                <strong class="timing-val" id="timing-bar">2000.0 ms</strong>
+              </div>
+            </div>
+
+            <div class="tag-copy-box">
+              <span class="micro tag-preview" id="copy-tag-preview">— BPM · —</span>
+              <button type="button" id="btn-copy-tag-strip" class="deck-pill-btn deck-pill-primary" disabled>
+                Copy Tag
+              </button>
+            </div>
+          </div>
+
+          <!-- Dual Visual Analytics: 12-Note Chromagram & Interactive SVG Camelot Wheel -->
+          <div class="analytics-grid">
+            <!-- 12-Note Chromagram Panel -->
+            <section class="analytics-panel chroma-panel" aria-labelledby="chroma-heading">
+              <div class="panel-head">
+                <div>
+                  <span class="micro panel-kicker">PITCH CLASS PROFILE</span>
+                  <h3 id="chroma-heading" class="panel-title">12-Note Chromagram</h3>
+                </div>
+                <div class="chroma-legend micro">
+                  <span class="legend-item"><span class="swatch swatch-tonic"></span>Tonic</span>
+                  <span class="legend-item"><span class="swatch swatch-scale"></span>Scale</span>
+                  <span class="legend-item"><span class="swatch swatch-out"></span>Outside</span>
+                </div>
+              </div>
+
+              <div class="chroma-chart" id="chroma-chart" role="list" aria-label="12 pitch class strengths">
+                <!-- Populated dynamically with 12 interactive pitch bars -->
+              </div>
+
+              <div class="chroma-foot micro">
+                <span id="chroma-scale-notes">SCALE TONES: —</span>
+                <span>CLICK ANY BAR TO HEAR PITCH</span>
+              </div>
+            </section>
+
+            <!-- Interactive SVG Camelot Harmonic Wheel Panel -->
+            <section class="analytics-panel camelot-panel" aria-labelledby="camelot-heading">
+              <div class="panel-head">
+                <div>
+                  <span class="micro panel-kicker">HARMONIC MIXING COMPASS</span>
+                  <h3 id="camelot-heading" class="panel-title">Interactive Camelot Wheel</h3>
+                </div>
+                <button
+                  type="button"
+                  id="btn-wheel-reset"
+                  class="deck-inline-link micro hidden"
+                >
+                  ↺ Track Key
+                </button>
+              </div>
+
+              <div class="camelot-layout">
+                <div class="camelot-wheel-mount" id="camelot-wheel-mount"></div>
+
+                <div class="compat-panel">
+                  <div class="compat-header micro">
+                    <span>COMPATIBLE TRANSITIONS FOR</span>
+                    <strong id="compat-active-label">11A · F# Minor</strong>
+                  </div>
+                  <div class="compat-list" id="compat-list"></div>
+
+                  <div class="wheel-legend micro">
+                    <span><i class="w-dot w-active"></i>Active</span>
+                    <span><i class="w-dot w-neighbor"></i>Rel / ±1</span>
+                    <span><i class="w-dot w-boost"></i>+2 Boost</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- Keyboard Shortcuts Reference -->
+          <div class="deck-shortcuts micro">
+            <span><kbd>Space</kbd> Play/Pause</span>
+            <span><kbd>M</kbd> Metronome</span>
+            <span><kbd>C</kbd> Key Chord</span>
+            <span><kbd>D</kbd> Tonic Drone</span>
+            <span><kbd>T</kbd> Tap Tempo</span>
+            <span><kbd>B</kbd> Snap Beat 1</span>
+            <span><kbd>H</kbd> ÷2/×2</span>
+            <span><kbd>R</kbd> Restart</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 003 / SESSION QUEUE & BATCH EXPORT ================= -->
+      <section id="queue-section" class="queue-section hidden" aria-labelledby="queue-heading">
+        <div class="section-bar">
+          <div>
+            <span class="micro">003 / SESSION QUEUE &amp; BATCH EXPORT</span>
+            <h2 id="queue-heading" class="section-title">
+              <span id="queue-count-text">0 Tracks Analyzed</span>
+            </h2>
+            <p class="section-sub">
+              Select any track to load it into the Harmonic Deck. Harmonic badges mark tracks compatible with the active selection.
+            </p>
+          </div>
+
+          <div class="section-bar-actions">
+            <label class="queue-sort-wrap micro" for="queue-sort-select">
+              <span>SORT</span>
+              <select id="queue-sort-select" class="sg-select">
+                <option value="order">Added Order</option>
+                <option value="bpm-asc">BPM (Low → High)</option>
+                <option value="bpm-desc">BPM (High → Low)</option>
+                <option value="camelot">Camelot Wheel</option>
+                <option value="name">Track Name</option>
+              </select>
+            </label>
+            <button type="button" id="btn-add-more" class="sg-btn sg-btn-outline sg-btn-sm">
+              + Add Files
+            </button>
+            <button type="button" id="btn-export-csv" class="sg-btn sg-btn-outline sg-btn-sm">
+              Export CSV ↓
+            </button>
+            <button type="button" id="btn-export-md" class="sg-btn sg-btn-ink sg-btn-sm">
+              Export Markdown ↓
+            </button>
+          </div>
+        </div>
+
+        <div class="sg-card table-card">
+          <div class="queue-table-head micro" aria-hidden="true">
+            <div class="q-col-idx">#</div>
+            <div class="q-col-name">Track</div>
+            <div class="q-col-dur">Time</div>
+            <div class="q-col-bpm">BPM</div>
+            <div class="q-col-key">Musical Key</div>
+            <div class="q-col-cam">Camelot</div>
+            <div class="q-col-conf">Conf.</div>
+            <div class="q-col-act">Action</div>
+          </div>
+          <div id="queue-table-body" class="queue-table-body" role="list"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Saint Gordon Collective Footer -->
+    <footer class="site-footer">
+      <div class="footer-inner">
+        <div class="footer-brand">Saint Gordon Collective</div>
+        <div class="footer-nav">
+          <a href="https://saintgordon.vercel.app" target="_blank" rel="noopener noreferrer">
+            Saint Gordon Home ↗
+          </a>
+          <a href="https://saintgordon.vercel.app/collection.html" target="_blank" rel="noopener noreferrer">
+            The Collection ↗
+          </a>
+          <a href="https://github.com/Firewallaby/bpm-key-finder" target="_blank" rel="noopener noreferrer">
+            BPM &amp; Key Finder on GitHub ↗
+          </a>
+        </div>
+        <div class="footer-meta micro">
+          <span>© <span id="footer-year">2026</span> SAINT GORDON COLLECTIVE</span>
+          <span>INDEPENDENT SOUND. IMPERFECT BY DESIGN.</span>
+          <span>100% CLIENT-SIDE WEB AUDIO</span>
+        </div>
+      </div>
+    </footer>
+
+    <!-- Global Toast Notifications -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <script type="module" src="js/app.js?v=20261124-1"></script>
+  </body>
+</html>
