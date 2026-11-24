@@ -1428,6 +1428,6 @@ export function exportQueueToMarkdown(tracks, accidentalStyle = 'auto') {
     );
   });
 
-  lines.push('', '---', '*Analyzed 100% client-side with [BPM & Key Finder](https://firewallaby.github.io/bpm-key-finder/) by Saint Gordon Collective.*');
+  lines.push('', '---', '*Analyzed 100% client-side with [BPM & Key Finder](https://saintgordon.github.io/bpm-key-finder/) by Saint Gordon Collective.*');
   return lines.join('\n');
 }

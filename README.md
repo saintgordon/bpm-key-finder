@@ -2,7 +2,7 @@
 
 > **Harmonic & Tempo Inspection Deck** — 100% client-side in your browser, built in the editorial monochrome studio style of [Saint Gordon Collective](https://saintgordon.vercel.app).
 
-**Live App:** [https://firewallaby.github.io/bpm-key-finder/](https://firewallaby.github.io/bpm-key-finder/)
+**Live App:** [https://saintgordon.github.io/bpm-key-finder/](https://saintgordon.github.io/bpm-key-finder/)
 
 ---
 
